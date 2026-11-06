@@ -53,6 +53,11 @@ export function eventText(event){
  return (reference?reference+' · ':'')+eventTypeLabel(event.type||event.action||'Perubahan operasional');
 }
 const errorLabels={
+ DESTINATION_LOCATION_REQUIRED:'Pilih lokasi stockpile tujuan dari Master Data.',DESTINATION_LOCATION_NOT_FOUND:'Lokasi tujuan tidak ditemukan atau tidak aktif.',DESTINATION_MODE_INVALID:'Lokasi tujuan tidak mendukung moda pengiriman ini.',
+ DESTINATION_LOCATION_AMBIGUOUS:'Pilih lokasi stockpile tujuan secara eksplisit karena area penerima memiliki beberapa lokasi.',INACTIVE_DESTINATION:'Tujuan pengiriman tidak aktif. Pilih lokasi, area, jetty, atau kapal yang aktif.',
+ RECEIVING_AREA_REQUIRED:'Lokasi LAND memerlukan area stok penerima yang aktif.',DESTINATION_STOCKPILE_REQUIRED:'Area tujuan belum memiliki stockpile aktif untuk SKU yang dipilih.',
+ OPEN_LOCATION_REFERENCE:'Lokasi masih dipakai permintaan atau ritase terbuka. Selesaikan pekerjaan sebelum mengubah pemetaan, moda, atau status aktif.',LOCATION_IN_USE:'Lokasi memiliki riwayat transaksi dan tidak dapat dihapus. Gunakan status nonaktif setelah pekerjaan selesai.',
+ RECEIVING_LOCATION_IN_USE:'Area stok masih dipetakan pada Master Lokasi Stockpile. Perbarui pemetaan terlebih dahulu.',STOCKPILE_LOCATION_INVALID:'Periksa kode, nama, moda pengiriman, dan area penerima lokasi stockpile.',STOCKPILE_LOCATIONS_STATE_INVALID:'Master lokasi tersimpan perlu diperiksa oleh Admin.',
  AUTH_REQUIRED:'Silakan login untuk mengakses aplikasi.',INVALID_LOGIN:'Username atau password tidak sesuai.',TOO_MANY_ATTEMPTS:'Terlalu banyak percobaan. Coba lagi dalam 15 menit.',
  CSRF_REJECTED:'Sesi berubah. Muat ulang halaman.',ORIGIN_REJECTED:'Permintaan harus berasal dari aplikasi ini.',DATABASE_UNAVAILABLE:'Penyimpanan tidak tersedia.',
  REVISION_CONFLICT:'Data diperbarui operator lain. Muat ulang sebelum menyimpan.',IDEMPOTENCY_CONFLICT:'ID aksi sudah dipakai untuk permintaan lain.',

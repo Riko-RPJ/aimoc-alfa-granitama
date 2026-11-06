@@ -605,5 +605,17 @@
   "{0} · {1}": "{0} · {1}",
   "{0} → {1} · {2}": "{0} → {1} · {2}",
   "Pengemudi": "Driver",
-  "Sesuai penugasan ritase": "Assigned trips"
+  "Sesuai penugasan ritase": "Assigned trips",
+  "Pilih lokasi stockpile tujuan dari Master Data.": "Select a destination stockpile location from Master Data.",
+  "Lokasi tujuan tidak ditemukan atau tidak aktif.": "The destination location does not exist or is inactive.",
+  "Lokasi tujuan tidak mendukung moda pengiriman ini.": "The destination does not support this transport mode.",
+  "Lokasi LAND memerlukan area stok penerima yang aktif.": "A LAND destination requires an active receiving inventory area.",
+  "Area tujuan belum memiliki stockpile aktif untuk SKU yang dipilih.": "The destination has no active stockpile for the selected SKU.",
+  "Lokasi masih dipakai permintaan atau ritase terbuka. Selesaikan pekerjaan sebelum mengubah pemetaan, moda, atau status aktif.": "This location is referenced by open requests or trips. Complete the work before changing its mapping, transport modes or active status.",
+  "Lokasi memiliki riwayat transaksi dan tidak dapat dihapus. Gunakan status nonaktif setelah pekerjaan selesai.": "This location has transaction history and cannot be deleted. Set it inactive after its work is completed.",
+  "Area stok masih dipetakan pada Master Lokasi Stockpile. Perbarui pemetaan terlebih dahulu.": "This inventory area is mapped in Stockpile Locations. Update the mapping first.",
+  "Periksa kode, nama, moda pengiriman, dan area penerima lokasi stockpile.": "Check the stockpile location code, name, transport modes and receiving area.",
+  "Master lokasi tersimpan perlu diperiksa oleh Admin.": "The saved location master needs Admin review.",
+  "Pilih lokasi stockpile tujuan secara eksplisit karena area penerima memiliki beberapa lokasi.": "Select the destination stockpile location explicitly because the receiving area has multiple locations.",
+  "Tujuan pengiriman tidak aktif. Pilih lokasi, area, jetty, atau kapal yang aktif.": "The delivery destination is inactive. Select an active location, inventory area, jetty or vessel."
 }

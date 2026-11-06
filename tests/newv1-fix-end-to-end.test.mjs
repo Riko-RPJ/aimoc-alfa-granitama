@@ -243,7 +243,7 @@ test('opt-in normalized staging delegates authenticated demo routes to the canon
   const before=await f.request('/api/v1/demo/context',{session:f.sessions.admin});
   assert.equal(before.status,200);assert.equal(before.data.source,'INTEGRATED_DEMO');
   const body={requestId:'demo-delegation-create',expectedRevision:before.data.revision,action:'request.create',
-   payload:{transferMode:'MARINE',jettyId:'jetty-1',vesselId:'vessel-1',destination:'Synthetic destination',
+   payload:{transferMode:'MARINE',destinationLocationId:'stockpile-location-crusher-2',jettyId:'jetty-1',vesselId:'vessel-1',destination:'Synthetic destination',
     lines:[{skuId:'split-12',quantity:40,unit:'t'}]}};
   const rejected=await f.request('/api/v1/demo/actions',{method:'POST',session:{cookie:f.sessions.admin.cookie},body});
   assert.equal(rejected.status,403);assert.equal(rejected.data.error,'CSRF_REJECTED');

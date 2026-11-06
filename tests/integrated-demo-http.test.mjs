@@ -48,7 +48,7 @@ test('normal authenticated handler integrates an 80t marine request over two ser
   const {db,state,actors,call,action,ok,context}=await fixture(t);
   assert.equal((await call('/api/v1/demo/context')).status,401);
   assert.equal((await call('/api/v1/demo/actions','POST',{}, {cookie:actors.admin.cookie})).status,403);
-  const created=await ok('request.create',{transferMode:'MARINE',jettyId:'jetty-1',vesselId:'vessel-1',destination:'Marunda',lines:[{skuId:'split-12',quantity:80,unit:'t'}]});
+  const created=await ok('request.create',{transferMode:'MARINE',destinationLocationId:'stockpile-location-crusher-2',jettyId:'jetty-1',vesselId:'vessel-1',destination:'Marunda',lines:[{skuId:'split-12',quantity:80,unit:'t'}]});
   const requestId=created.result.requestId,requestKey=randomUUID();
   const planned=await ok('request.plan',{requestId,assignments:[{truckId:state.trucks[0].id,driverUserId:actors.driver.id}]},'admin',{requestId:requestKey,expectedRevision:created.revision});
   const replay=await ok('request.plan',{requestId,assignments:[{truckId:state.trucks[0].id,driverUserId:actors.driver.id}]},'admin',{requestId:requestKey,expectedRevision:created.revision});
@@ -129,7 +129,7 @@ test('normal authenticated handler integrates an 80t marine request over two ser
 test('LAND multiSKU receipts update destination inventory without vessel effects',async t=>{
   const {state,actors,action,ok,context}=await fixture(t);
   const before=await context();
-  const created=await ok('request.create',{transferMode:'LAND',destinationId:'crusher-2',destination:'Stockpile Marunda DEMO',lines:[{skuId:'split-12',quantity:12,unit:'m3'},{skuId:'basecourse',quantity:11,unit:'t'}]});
+  const created=await ok('request.create',{transferMode:'LAND',destinationLocationId:'stockpile-location-crusher-2',destinationId:'crusher-2',destination:'Stockpile Marunda DEMO',lines:[{skuId:'split-12',quantity:12,unit:'m3'},{skuId:'basecourse',quantity:11,unit:'t'}]});
   const planned=await ok('request.plan',{requestId:created.result.requestId,assignments:[{truckId:state.trucks[0].id,driverUserId:actors.driver.id}]});
   assert.equal(planned.state.trips.length,2);
   for(const trip of planned.state.trips){
@@ -159,7 +159,7 @@ test('LAND multiSKU receipts update destination inventory without vessel effects
 test('concurrent HTTP plans serialize revisions and identical retries reserve once',async t=>{
   const {state,actors,action,ok,context}=await fixture(t);
   const ids=[];
-  for(let i=0;i<2;i++)ids.push((await ok('request.create',{transferMode:'MARINE',jettyId:'jetty-1',vesselId:'vessel-1',destination:'Concurrent demo',lines:[{skuId:'split-12',quantity:40,unit:'t'}]})).result.requestId);
+  for(let i=0;i<2;i++)ids.push((await ok('request.create',{transferMode:'MARINE',destinationLocationId:'stockpile-location-crusher-2',jettyId:'jetty-1',vesselId:'vessel-1',destination:'Concurrent demo',lines:[{skuId:'split-12',quantity:40,unit:'t'}]})).result.requestId);
   const revision=(await context()).revision;
   const payload=requestId=>({requestId,assignments:[{truckId:state.trucks[0].id,driverUserId:actors.driver.id}]});
   const results=await Promise.all(ids.map(id=>action('request.plan',payload(id),'admin',{expectedRevision:revision})));
@@ -176,4 +176,56 @@ test('concurrent HTTP plans serialize revisions and identical retries reserve on
   assert.deepEqual(starts.map(x=>x.status).sort(),[200,409]);
   const live=(await context()).state.trips.filter(x=>x.status!=='queued');
   assert.equal(live.length,1);
+});
+
+test('shared destination master enforces route, identity, snapshot and legacy HTTP validation',async t=>{
+ const {actors,call,action,ok,context}=await fixture(t);
+ const initial=await context();
+ const payload={code:'LOC-SHARED',name:'Synthetic destination A',address:'Synthetic address',transportModes:['LAND','MARINE'],receivingCrusherId:'crusher-2',active:true};
+ assert.equal((await action('master.stockpileLocation.save',payload,'stock1')).status,403);
+ const created=await ok('master.stockpileLocation.save',payload);
+ const location=created.state.stockpileLocations.find(x=>x.code===payload.code);assert.ok(location);
+ assert.ok((await context('jetty1')).state.stockpileLocations.some(x=>x.id===location.id));
+ assert.equal((await action('master.stockpileLocation.save',{...payload,code:'loc-shared'})).body.error,'DUPLICATE');
+ const lines=[{skuId:'split-12',quantity:3,unit:'t'}];
+ assert.equal((await action('request.create',{transferMode:'LAND',destination:'Untrusted text',destinationId:'crusher-2',lines})).body.error,'DESTINATION_LOCATION_REQUIRED');
+ assert.equal((await action('request.create',{transferMode:'LAND',destinationLocationId:location.id,destinationId:'crusher-1',lines})).body.error,'DESTINATION_MISMATCH');
+ const request=await ok('request.create',{transferMode:'LAND',destinationLocationId:location.id,destination:'Forged destination text',lines});
+ const requestId=request.result.requestId;
+ assert.equal(request.state.requests.find(x=>x.id===requestId).destination,payload.name);
+ assert.equal(request.state.requests.find(x=>x.id===requestId).destinationId,'crusher-2');
+ await ok('master.stockpileLocation.save',{...location,name:'Synthetic destination B'});
+ const plan=await ok('request.plan',{requestId,assignments:[{truckId:'truck-1',driverUserId:actors.driver.id}]});
+ assert.equal(plan.state.trips.find(x=>x.requestId===requestId).destinationLocationSnapshot.name,payload.name);
+ assert.equal(plan.state.dispatches.find(x=>x.requestId===requestId).destinationLocationSnapshot.name,payload.name);
+ assert.equal((await action('master.stockpileLocation.save',{...location,active:false})).body.error,'OPEN_LOCATION_REFERENCE');
+ assert.equal((await action('master.stockpileLocation.save',{...location,receivingCrusherId:'crusher-1'})).body.error,'OPEN_LOCATION_REFERENCE');
+ assert.equal((await action('master.stockpileLocation.delete',{id:location.id})).body.error,'LOCATION_IN_USE');
+ const legacyPayload={transferMode:'MARINE',jettyId:'jetty-1',vesselId:'vessel-1',destination:'Free text',lines};
+ const noMaster=await call('/api/action','POST',{action:'request.create',payload:legacyPayload,requestId:randomUUID()},'admin');
+ assert.equal(noMaster.body.error,'DESTINATION_LOCATION_REQUIRED');
+ const accepted=await call('/api/action','POST',{action:'request.create',payload:{...legacyPayload,destinationLocationId:location.id},requestId:randomUUID()},'jetty1');
+ assert.equal(accepted.status,200);assert.equal(accepted.body.state.requests.find(x=>x.id===accepted.body.result.entityId).destinationLocationSnapshot.name,'Synthetic destination B');
+ const final=await context();
+ assert.deepEqual(final.state.stockpiles.map(x=>x.onHandM3),initial.state.stockpiles.map(x=>x.onHandM3));
+ assert.deepEqual(final.state.vessels.map(x=>x.loadedT),initial.state.vessels.map(x=>x.loadedT));
+ assert.equal(final.state.inventoryLedger.length,initial.state.inventoryLedger.length);
+});
+
+test('location projection is read-only for old documents; empty, inactive and marine-only lists stay explicit',async t=>{
+ const {db,call,action,ok,context}=await fixture(t);
+ await db.query("UPDATE aimoc_alfa_ops.operation SET document=document-'stockpileLocations' WHERE id=1");
+ const before=(await db.query('SELECT document,revision FROM aimoc_alfa_ops.operation WHERE id=1')).rows[0];
+ const projected=await context();assert.equal(projected.state.stockpileLocations.length,2);
+ const after=(await db.query('SELECT document,revision FROM aimoc_alfa_ops.operation WHERE id=1')).rows[0];assert.deepEqual(after,before);
+ await db.query("UPDATE aimoc_alfa_ops.operation SET document=jsonb_set(document,'{stockpileLocations}','[]'::jsonb) WHERE id=1");
+ assert.deepEqual((await context()).state.stockpileLocations,[]);
+ const marineOnly={code:'LOC-MARINE',name:'Synthetic marine only',address:'',transportModes:['MARINE'],receivingCrusherId:null,active:true};
+ const master=await ok('master.stockpileLocation.save',marineOnly),location=master.state.stockpileLocations[0];
+ const body={transferMode:'LAND',destinationLocationId:location.id,lines:[{skuId:'abu-batu',quantity:1,unit:'t'}]};
+ assert.equal((await action('request.create',body)).body.error,'DESTINATION_MODE_INVALID');
+ await ok('master.stockpileLocation.save',{...location,active:false});
+ assert.equal((await action('request.create',{...body,transferMode:'MARINE',jettyId:'jetty-1',vesselId:'vessel-1'})).body.error,'INACTIVE_DESTINATION');
+ await ok('master.stockpileLocation.delete',{id:location.id});assert.deepEqual((await context()).state.stockpileLocations,[]);
+ assert.equal((await call('/api/state','GET',undefined,'admin')).body.state.stockpileLocations.length,0);
 });

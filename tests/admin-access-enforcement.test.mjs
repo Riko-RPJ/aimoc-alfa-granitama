@@ -91,7 +91,7 @@ test('real backend capabilities endpoint matches role and rejects forbidden stat
   const operation=(await db.query('SELECT document FROM aimoc_alfa_ops.operation WHERE id=1')).rows[0].document;
   operation.crushers.find(x=>x.id==='crusher-2').active=false;
   await db.query('UPDATE aimoc_alfa_ops.operation SET document=$1::jsonb WHERE id=1',[JSON.stringify(operation)]);
-  const request=await response(jetty1.username,'POST','/api/action',{requestId:'pickup-request',action:'request.create',payload:{jettyId:'jetty-1',vesselId:'vessel-1',destination:'Marunda',lines:[{skuId:'split-12',quantity:28,unit:'m3'}]}});
+  const request=await response(jetty1.username,'POST','/api/action',{requestId:'pickup-request',action:'request.create',payload:{jettyId:'jetty-1',vesselId:'vessel-1',destinationLocationId:'stockpile-location-crusher-2',destination:'Untrusted description ignored',lines:[{skuId:'split-12',quantity:28,unit:'m3'}]}});
   assert.equal(request.status,200);
   const plan=await response(admin.username,'POST','/api/action',{requestId:'pickup-plan',action:'request.plan',payload:{requestId:request.data.result.entityId}});
   assert.equal(plan.status,200);
