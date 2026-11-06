@@ -1,5 +1,6 @@
 import {hash} from './auth.mjs';
 import {applyIntegratedAction,integratedView} from './integrated-demo-domain.mjs';
+import {requestDetail} from './request-detail.mjs';
 import {summarizeSkuStocks} from './sku-stock-summary.mjs';
 
 const fail=(status,code,message)=>{throw Object.assign(new Error(message),{status,code});};
@@ -48,6 +49,16 @@ async function context(db,actor){
 
 export async function handleIntegratedDemo({db,path,method,req,actor,send,parseBody}) {
   if(!['admin','stock','jetty','driver'].includes(actor.role))fail(403,'FORBIDDEN_SCOPE','Peran tidak didukung.');
+  const detailPath=/^\/api\/v1\/demo\/requests\/([^/]+)\/detail$/.exec(path);
+  if(detailPath){
+    if(method!=='GET')fail(405,'METHOD_NOT_ALLOWED','Use GET.');
+    let requestId;try{requestId=decodeURIComponent(detailPath[1]);}catch{fail(400,'INVALID_REQUEST_ID','Identitas permintaan tidak valid.');}
+    if(!validId(requestId))fail(400,'INVALID_REQUEST_ID','Identitas permintaan tidak valid.');
+    const row=(await db.query('SELECT document,revision,updated_at FROM aimoc_alfa_ops.operation WHERE id=1')).rows[0];
+    if(!row)fail(503,'NOT_INITIALIZED','Data operasional belum diinisialisasi.');
+    const drivers=await driversFor(db);
+    return send(200,{...requestDetail(row.document,actor,{requestId,drivers}),revision:Number(row.revision),updatedAt:row.updated_at,serverTime:new Date().toISOString()});
+  }
   if(path==='/api/v1/demo/sku-stock'){
     if(method!=='GET')fail(405,'METHOD_NOT_ALLOWED','Use GET.');
     const params=new URL(req.url,'http://local').searchParams;
