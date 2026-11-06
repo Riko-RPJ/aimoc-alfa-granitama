@@ -617,5 +617,6 @@
   "Periksa kode, nama, moda pengiriman, dan area penerima lokasi stockpile.": "Check the stockpile location code, name, transport modes and receiving area.",
   "Master lokasi tersimpan perlu diperiksa oleh Admin.": "The saved location master needs Admin review.",
   "Pilih lokasi stockpile tujuan secara eksplisit karena area penerima memiliki beberapa lokasi.": "Select the destination stockpile location explicitly because the receiving area has multiple locations.",
-  "Tujuan pengiriman tidak aktif. Pilih lokasi, area, jetty, atau kapal yang aktif.": "The delivery destination is inactive. Select an active location, inventory area, jetty or vessel."
+  "Tujuan pengiriman tidak aktif. Pilih lokasi, area, jetty, atau kapal yang aktif.": "The delivery destination is inactive. Select an active location, inventory area, jetty or vessel.",
+  "Area stok": "Inventory area"
 }

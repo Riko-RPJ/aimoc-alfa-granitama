@@ -1,4 +1,5 @@
 import {DomainError} from './domain.mjs';
+import {isDispatchSourceArea} from '../shared/inventory-areas.mjs';
 
 const SCALE = 1000000n;
 const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
@@ -70,7 +71,7 @@ export function summarizeSkuStocks(state, actor, {transferMode = 'MARINE', desti
       if (physical !== null && reservation !== null && reservation > physical) {issues.push('RESERVATION_EXCEEDS_ON_HAND'); freeValid = eligibleValid = false;}
       const crusher = state.crushers.find(row => row.id === stock.crusherId);
       if (!crusher || crusherIds.get(stock.crusherId) !== 1) {issues.push('UNKNOWN_OR_AMBIGUOUS_CRUSHER'); eligibleValid = false;}
-      const sourceEligible = active(product) && active(stock) && active(crusher) && crusher.id !== destination;
+      const sourceEligible = active(product) && active(stock) && isDispatchSourceArea(crusher) && crusher.id !== destination;
       if (sourceEligible) {
         eligibleStockpileCount++;
         if (physical !== null && reservation !== null && reservation <= physical) eligible += physical - reservation;

@@ -1,6 +1,7 @@
 import { randomUUID, createHash } from 'node:crypto';
+import {isDispatchSourceArea} from '../shared/inventory-areas.mjs';
 import { applyAction, DomainError } from './domain.mjs';
-import {ensureStockpileLocations, stockpileLocationsForRead, applyStockpileLocationAction, resolveStockpileDestination} from './stockpile-locations.mjs';
+import {ensureStockpileLocations, stockpileLocationsForRead, applyStockpileLocationAction, resolveStockpileDestination, ensureReceivingStockpilesForRequest} from './stockpile-locations.mjs';
 
 // This is an explicitly synthetic workflow over the existing operation document.
 // It does not write normalized production evidence or manufacture verification.
@@ -80,6 +81,7 @@ function destination(s, request, skuId, requestedStockpileId) {
 }
 
 function createRequest(s, p, actor) {
+  if (p.transferMode === 'LAND') {admin(actor);ensureReceivingStockpilesForRequest(s, p);}
   const resolved = resolveStockpileDestination(s, p);
   if ((p.transferMode || 'MARINE') === 'MARINE') {
     const result = applyAction(s, 'request.create', {...p, destination: resolved.destination}, actor);
@@ -124,6 +126,7 @@ function planRequest(s, p, actor, options) {
   if (!integrated(request)) fail('Permintaan ini bukan workflow demo terintegrasi.', 'SOURCE_MISMATCH', 409);
   if (request.status !== 'requested') fail('Permintaan sudah direncanakan.', 'ALREADY_PLANNED', 409);
   if (p.destinationLocationId !== undefined && request.destinationLocationId && p.destinationLocationId !== request.destinationLocationId) fail('Lokasi tujuan permintaan tidak boleh diganti melalui perencanaan.', 'DESTINATION_MISMATCH', 409);
+  ensureReceivingStockpilesForRequest(s, {...request, ...(p.destinationLocationId === undefined ? {} : {destinationLocationId: p.destinationLocationId})});
   const resolved = resolveStockpileDestination(s, {...request, ...(p.destinationLocationId === undefined ? {} : {destinationLocationId: p.destinationLocationId})}, {allowLegacy: true});
   if (!request.destinationLocationSnapshot) Object.assign(request, resolved);
   else if (request.transferMode === 'LAND' && (request.destinationLocationSnapshot.receivingCrusherId !== resolved.destinationId || request.destinationId !== resolved.destinationId)) fail('Snapshot area penerimaan tidak sesuai lokasi tujuan.', 'DESTINATION_MISMATCH', 409);
@@ -168,7 +171,7 @@ function planRequest(s, p, actor, options) {
     const product = row(s, 'products', line.skuId);
     if (!product.active) fail('SKU nonaktif.', 'INACTIVE_SOURCE', 409);
     const target = marine ? null : destination(s, request, line.skuId, line.destinationStockpileId);
-    const stocks = s.stockpiles.filter(stock => stock.active && stock.skuId === line.skuId && row(s, 'crushers', stock.crusherId).active && (marine || stock.crusherId !== request.destinationId)).sort((a, b) => (b.onHandM3 - b.reservedM3) - (a.onHandM3 - a.reservedM3) || a.code.localeCompare(b.code));
+    const stocks = s.stockpiles.filter(stock => stock.active && stock.skuId === line.skuId && isDispatchSourceArea(row(s, 'crushers', stock.crusherId)) && (marine || stock.crusherId !== request.destinationId)).sort((a, b) => (b.onHandM3 - b.reservedM3) - (a.onHandM3 - a.reservedM3) || a.code.localeCompare(b.code));
     let remainingT = line.tonnageT;
     for (const stock of stocks) {
       const availableM3 = round(stock.onHandM3 - stock.reservedM3);

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import {isPhysicalCrusher,isDispatchSourceArea} from '../shared/inventory-areas.mjs';
 export { createSeed } from './seed.mjs';
 
 const EPS=0.0000005, r=n=>Math.round(n*1e6)/1e6, now=()=>new Date().toISOString();
@@ -38,6 +39,8 @@ function saveMaster(s,entity,p,u){
   const keys={product:'products',crusher:'crushers',stockpile:'stockpiles',truck:'trucks',jetty:'jetties',vessel:'vessels'};
   const key=keys[entity];if(!key)fail('Master tidak didukung.');
   const prev=p.id?get(s,key,p.id):null;
+  if(entity==='crusher'&&(prev?.kind==='RECEIVING_AREA'||['kind','production','sourceEligible','managedBy','stockpileLocationId'].some(k=>Object.hasOwn(p,k))))fail('Area penerimaan dikelola otomatis melalui lokasi stockpile.','SYSTEM_MANAGED_AREA',409);
+  if(entity==='stockpile'&&prev?.managedBy==='STOCKPILE_LOCATION'&&((p.crusherId!==undefined&&p.crusherId!==prev.crusherId)||(p.skuId!==undefined&&p.skuId!==prev.skuId)))fail('Identitas persediaan penerimaan dikelola otomatis.','SYSTEM_MANAGED_STOCKPILE',409);
   const row={...(prev||{}),id:prev?.id||uid(entity),code:text(p.code??prev?.code,'Kode',64),active:p.active===undefined?(prev?.active??true):Boolean(p.active)};
   const referenceField={product:'skuId',crusher:'crusherId',stockpile:'stockpileId',truck:'truckId',jetty:'jettyId',vessel:'vesselId'}[entity];
   if(prev&&!row.active&&s.trips.some(t=>t[referenceField]===row.id&&openTrip(t)))fail('Master masih memiliki ritase yang belum kembali. Selesaikan pekerjaan sebelum menonaktifkan.','OPEN_WORK',409);
@@ -47,7 +50,7 @@ function saveMaster(s,entity,p,u){
   if(entity==='stockpile'){
     row.crusherId=get(s,'crushers',p.crusherId??prev?.crusherId).id;row.skuId=get(s,'products',p.skuId??prev?.skuId).id;
     if(prev&&(prev.crusherId!==row.crusherId||prev.skuId!==row.skuId)&&(prev.onHandM3>EPS||prev.reservedM3>EPS||s.trips.some(t=>t.stockpileId===row.id)||s.measurements.some(m=>m.stockpileId===row.id)||s.inventoryLedger.some(l=>l.stockpileId===row.id)))fail('Identitas stockpile yang memiliki stok, pengukuran, atau riwayat tidak boleh diganti.');
-    const skus=new Set(s.stockpiles.filter(x=>x.id!==row.id&&x.crusherId===row.crusherId&&x.active).map(x=>x.skuId));skus.add(row.skuId);if(row.active&&skus.size>6)fail('Satu crusher maksimal menghasilkan enam SKU.');
+    const skus=new Set(s.stockpiles.filter(x=>x.id!==row.id&&x.crusherId===row.crusherId&&x.active).map(x=>x.skuId));skus.add(row.skuId);if(row.active&&isPhysicalCrusher(get(s,'crushers',row.crusherId))&&skus.size>6)fail('Satu crusher maksimal menghasilkan enam SKU.');
     row.onHandM3=num(p.onHandM3??prev?.onHandM3??0,'Stok m³');row.reservedM3=prev?.reservedM3||0;if(row.onHandM3+EPS<row.reservedM3)fail('Stok tidak boleh lebih rendah dari stok tereservasi.');
     if(prev&&row.onHandM3!==prev.onHandM3)fail('Gunakan pengukuran dan persetujuan stok untuk mengubah stok existing.');
   }
@@ -71,10 +74,12 @@ function deleteMaster(s,entity,p,u){
   const keys={product:'products',crusher:'crushers',stockpile:'stockpiles',truck:'trucks',jetty:'jetties',vessel:'vessels'};
   const key=keys[entity];if(!key)fail('Master tidak didukung.');
   const row=get(s,key,p.id);
+  if(entity==='crusher'&&row.kind==='RECEIVING_AREA')fail('Area penerimaan dikelola otomatis melalui lokasi stockpile.','SYSTEM_MANAGED_AREA',409);
+  if(entity==='stockpile'&&row.managedBy==='STOCKPILE_LOCATION')fail('Persediaan penerimaan dikelola melalui lokasi stockpile.','SYSTEM_MANAGED_STOCKPILE',409);
   const referenced={
     product:()=>s.stockpiles.some(x=>x.skuId===row.id)||s.requests.some(x=>x.lines?.some(l=>l.skuId===row.id))||s.dispatches.some(x=>x.skuId===row.id)||s.trips.some(x=>x.skuId===row.id),
     crusher:()=>s.stockpiles.some(x=>x.crusherId===row.id)||s.dispatches.some(x=>x.crusherId===row.id)||s.trips.some(x=>x.crusherId===row.id)||s.measurements.some(x=>x.crusherId===row.id),
-    stockpile:()=>row.onHandM3>EPS||row.reservedM3>EPS||s.dispatches.some(x=>x.stockpileId===row.id)||s.trips.some(x=>x.stockpileId===row.id)||s.measurements.some(x=>x.stockpileId===row.id)||s.inventoryLedger.some(x=>x.stockpileId===row.id),
+    stockpile:()=>row.onHandM3>EPS||row.reservedM3>EPS||s.requests.some(x=>x.lines?.some(line=>line.destinationStockpileId===row.id))||s.dispatches.some(x=>x.stockpileId===row.id)||s.trips.some(x=>x.stockpileId===row.id||x.destinationStockpileId===row.id)||s.measurements.some(x=>x.stockpileId===row.id)||s.inventoryLedger.some(x=>x.stockpileId===row.id),
     truck:()=>s.trips.some(x=>x.truckId===row.id),
     jetty:()=>s.vessels.some(x=>x.jettyId===row.id)||s.requests.some(x=>x.jettyId===row.id)||s.dispatches.some(x=>x.jettyId===row.id)||s.trips.some(x=>x.jettyId===row.id),
     vessel:()=>row.loadedT>EPS||row.reservedT>EPS||s.requests.some(x=>x.vesselId===row.id)||s.dispatches.some(x=>x.vesselId===row.id)||s.trips.some(x=>x.vesselId===row.id)
@@ -128,7 +133,7 @@ function planRequest(s,p,u){
   const totalT=r(req.lines.reduce((a,l)=>a+l.tonnageT,0));if(totalT>vessel.payloadLimitT-vessel.loadedT-vessel.reservedT+EPS)fail('Sisa kapasitas kapal tidak mencukupi termasuk reservasi berjalan.','VESSEL_CAPACITY',409);
   const fleet=s.trucks.filter(t=>t.active);if(!fleet.length)fail('Tidak ada truk aktif.','NO_TRUCKS',409);
   const allocations=[];
-  for(const line of req.lines){if(!get(s,'products',line.skuId).active)fail('SKU dalam permintaan sudah nonaktif.');let remaining=line.volumeM3;const stocks=s.stockpiles.filter(x=>x.active&&x.skuId===line.skuId&&get(s,'crushers',x.crusherId).active).sort((a,b)=>(b.onHandM3-b.reservedM3)-(a.onHandM3-a.reservedM3)||a.code.localeCompare(b.code));for(const stock of stocks){const take=r(Math.min(remaining,stock.onHandM3-stock.reservedM3));if(take>EPS){allocations.push({stock,line,volumeM3:take});remaining=r(remaining-take);}if(remaining<=EPS)break;}if(remaining>EPS)fail(`Stok tersedia ${get(s,'products',line.skuId).name} tidak mencukupi.`,'INSUFFICIENT_STOCK',409);}
+  for(const line of req.lines){if(!get(s,'products',line.skuId).active)fail('SKU dalam permintaan sudah nonaktif.');let remaining=line.volumeM3;const stocks=s.stockpiles.filter(x=>x.active&&x.skuId===line.skuId&&isDispatchSourceArea(get(s,'crushers',x.crusherId))).sort((a,b)=>(b.onHandM3-b.reservedM3)-(a.onHandM3-a.reservedM3)||a.code.localeCompare(b.code));for(const stock of stocks){const take=r(Math.min(remaining,stock.onHandM3-stock.reservedM3));if(take>EPS){allocations.push({stock,line,volumeM3:take});remaining=r(remaining-take);}if(remaining<=EPS)break;}if(remaining>EPS)fail(`Stok tersedia ${get(s,'products',line.skuId).name} tidak mencukupi.`,'INSUFFICIENT_STOCK',409);}
   const loads=new Map(fleet.map(t=>[t.id,s.trips.filter(x=>x.truckId===t.id&&openTrip(x)).length*t.cycleMinutes]));const result=[];let globalSequence=s.trips.reduce((m,t)=>Math.max(m,t.sequence||0),0);
   const initialTripCount=s.trips.length;let totalTripsEstimate=0;for(const a of allocations){const maxCap=Math.max(...fleet.map(t=>Math.min(t.bedM3,t.payloadLimitT/a.line.densityTPerM3)));totalTripsEstimate+=Math.ceil(a.volumeM3/maxCap);}if(totalTripsEstimate>2000||s.trips.length+totalTripsEstimate>20000)fail('Permintaan terlalu besar untuk satu rencana (maks. 2.000 ritase).','TRIP_LIMIT',409);
   const stockpileIds=[...new Set(allocations.map(a=>a.stock.id))],crusherIds=[...new Set(allocations.map(a=>a.stock.crusherId))],skuIds=[...new Set(allocations.map(a=>a.line.skuId))];

@@ -1,4 +1,6 @@
 import {randomUUID} from 'node:crypto';
+import {isPhysicalCrusher} from '../shared/inventory-areas.mjs';
+import {guardLocationOperatorReferences} from './location-guards.mjs';
 import {hash,token,passwordHash,checkPassword,userView,cookieValue,sessionCookie} from './auth.mjs';
 import {applyAction,publicState} from './domain.mjs';
 import {projectV1Read,isV1UnimplementedMutation} from './v1/read-model.mjs';
@@ -249,7 +251,7 @@ export function createHandler(db,{secure=false}={}) {
         const body=await parseBody(req);
         const row=(await db.query('SELECT document FROM aimoc_alfa_ops.operation WHERE id=1')).rows[0];
         if(!row)fail(503,'NOT_INITIALIZED','Master data not initialized.');
-        const crusherIds=(row.document.crushers||[]).filter(x=>x.active!==false).map(x=>x.id);
+        const crusherIds=(row.document.crushers||[]).filter(x=>x.active!==false&&isPhysicalCrusher(x)).map(x=>x.id);
         const saved=await saveCrusherLoadingPoint(db,{actorId:actor.id,body,crusherIds});
         return send(200,{source:'LOCAL_LOCATION_MASTER',item:saved});
       }
@@ -306,6 +308,7 @@ export function createHandler(db,{secure=false}={}) {
             if(payload.method==='camera_pending'&&!payload.evidenceId)fail(400,'EVIDENCE_REQUIRED','Unggah foto sebelum menyimpan bukti kamera.');
           }
           const state=structuredClone(locked.document);
+          await guardLocationOperatorReferences(c,state,body.action,payload);
           guardLegacyIntegratedMutation(state,body.action,payload);
           guardReceivingCrusherMutation(state,body.action,payload);
           const destination=body.action==='request.create'?resolveStockpileDestination(state,payload,{allowLegacy:!Object.hasOwn(state,'stockpileLocations')}):null;
@@ -337,7 +340,11 @@ export function createHandler(db,{secure=false}={}) {
           const masters=(await db.query('SELECT document FROM aimoc_alfa_ops.operation WHERE id=1')).rows[0].document;
           if(crusherIds.some(id=>!masters.crushers.some(c=>c.id===id&&c.active))||jettyIds.some(id=>!masters.jetties.some(j=>j.id===id&&j.active)))fail(400,'USER_SCOPE','Lokasi operator tidak terdaftar atau tidak aktif.');
           const id=randomUUID(),encoded=await passwordHash(b.password);
-          const row=(await db.query('INSERT INTO aimoc_alfa_ops.users(id,username,display_name,password_hash,role,crusher_ids,jetty_ids) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *',[id,username,b.displayName.trim().slice(0,100),encoded,b.role,crusherIds,jettyIds])).rows[0];return send(201,{user:userView(row)});
+          const row=await db.transaction(async c=>{
+            const current=(await c.query('SELECT document FROM aimoc_alfa_ops.operation WHERE id=1 FOR UPDATE')).rows[0].document;
+            if(crusherIds.some(id=>!current.crushers.some(area=>area.id===id&&area.active))||jettyIds.some(id=>!current.jetties.some(jetty=>jetty.id===id&&jetty.active)))fail(400,'USER_SCOPE','Lokasi operator tidak terdaftar atau tidak aktif.');
+            return (await c.query('INSERT INTO aimoc_alfa_ops.users(id,username,display_name,password_hash,role,crusher_ids,jetty_ids) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *',[id,username,b.displayName.trim().slice(0,100),encoded,b.role,crusherIds,jettyIds])).rows[0];
+          });return send(201,{user:userView(row)});
         }
       }
       if(path==='/api/evidence'&&method==='POST'){
