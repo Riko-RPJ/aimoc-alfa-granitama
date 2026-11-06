@@ -196,6 +196,15 @@ with a returning driver remains `in_progress`, with nonzero `pendingTrips`.
 
 ## Scoped view and UI hints
 
+The Admin Dispatch & Trips table separates dispatch, trip, truck, source,
+destination and the SKU's planned trip quantity. Admin Details is read-only:
+assignment QR values come from the request-detail endpoint and must match the
+current request/trip/dispatch/truck tuple. Waiting cargo has no QR; historical
+QRs are labelled, and stale or mismatching references are hidden. Driver and
+location-operator workspaces retain their role-scoped operational actions.
+The explicit Admin QR scan test is available under Audit & NetSuite, outside
+Details; it retains the existing Admin-only command and simulation provenance.
+
 `integratedView` returns canonical masters plus only integrated trips visible
 to the actor. Drivers see their assigned trips, Stock sees source or LAND
 destination trips for its crusher scope, Jetty sees its jetty trips, and Admin
