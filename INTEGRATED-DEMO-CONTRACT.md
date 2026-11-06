@@ -196,6 +196,17 @@ with a returning driver remains `in_progress`, with nonzero `pendingTrips`.
 
 ## Scoped view and UI hints
 
+Driver Overview has two server-computed daily metrics in `driverDailySummary`.
+The day is Asia/Jakarta, with an inclusive start and exclusive next-midnight
+end. Unfinished work includes this Driver's open assigned/started work from
+previous days; future-day assignments and cancellations are excluded.
+Completion counts verified returns during today, irrespective of the original
+assignment date. Unloading alone does not complete a trip. Invalid date evidence
+makes the affected metric unavailable rather than inventing a zero. The read
+projection never persists the summary or exposes it to other roles. Driver
+Overview omits the fleet-status and workflow-information cards; operator actions,
+task lists, assignment QR and other roles' overviews are unchanged.
+
 The Admin Dispatch & Trips table separates dispatch, trip, truck, source,
 destination and the SKU's planned trip quantity. Admin Details is read-only:
 assignment QR values come from the request-detail endpoint and must match the

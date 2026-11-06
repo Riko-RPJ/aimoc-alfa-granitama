@@ -15,6 +15,7 @@
 
 
 /* Operational tables fit their panel; narrow screens retain every field as cards. */
+.ig-driver-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:17px;margin-bottom:24px}.ig-driver-summary>.ig-metric{min-width:0}.ig-driver-summary>.ig-metric>span,.ig-driver-summary>.ig-metric>small{overflow-wrap:anywhere}.ig-driver-summary .ig-driver-summary-unavailable{color:#9a742f}@media(max-width:750px){.ig-driver-summary{gap:10px}.ig-driver-summary>.ig-metric{padding:17px 14px}.ig-driver-summary>.ig-metric>span{font-size:11px;line-height:1.6}.ig-driver-summary>.ig-metric>small{font-size:10px}}
 .ig-operational-table-wrap{width:100%;max-width:100%;min-width:0;overflow:visible}
 .ig-table.ig-operational-table{width:100%;min-width:0;max-width:100%;table-layout:fixed}
 .ig-operational-table th,.ig-operational-table td{min-width:0;max-width:none;padding:13px 8px;white-space:normal;overflow-wrap:anywhere;word-break:normal;vertical-align:top}
