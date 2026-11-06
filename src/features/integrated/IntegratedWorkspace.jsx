@@ -6,6 +6,8 @@ import {LanguageSwitcher,Button,Field,Modal} from '../../components/ui/index.jsx
 import {MasterData,MasterModal} from '../master-data/index.jsx';
 import {MeasurementModal} from '../inventory/index.jsx';
 import './integrated.css';
+import {TransferSkuStock} from './TransferSkuStock.jsx';
+import {useTransferSkuStocks} from './useTransferSkuStocks.js';
 
 const array=v=>Array.isArray(v)?v:[];
 const n=v=>Number(v)||0;
@@ -72,7 +74,7 @@ export function IntegratedWorkspace({user,csrf,logout,logoutError,onUnauthorized
    <footer className="ig-footer">AIMOC · {L('Data bersama diperbarui setiap 3 detik. Semua aksi diverifikasi ulang di server.','Shared data refreshes every 3 seconds. All actions are revalidated on the server.')}<span>INTEGRATED_DEMO</span></footer>
    </main>
   </div>
-  {modal?.type==='request'&&<RequestForm {...{L,products,crushers,stockpiles,jetties,vessels,blocked,stockpileLocations}} canManageLocations={role==='admin'} onManageLocations={()=>{setModal(null);setMasterTab('stockpile-location');navigate('master');}} onClose={()=>setModal(null)} onSubmit={payload=>act('request.create',payload)}/>}
+  {modal?.type==='request'&&<RequestForm {...{L,products,crushers,stockpiles,jetties,vessels,blocked,stockpileLocations}} revision={snapshot?.revision} dataStale={stale} locale={language==='en'?'en-GB':'id-ID'} canManageLocations={role==='admin'} onManageLocations={()=>{setModal(null);setMasterTab('stockpile-location');navigate('master');}} onClose={()=>setModal(null)} onSubmit={payload=>act('request.create',payload)}/>}
   {modal?.type==='plan'&&<PlanForm {...{L,trucks,drivers,blocked}} request={modal.request} onClose={()=>setModal(null)} onSubmit={payload=>act('request.plan',payload)}/>}
   {modal?.type==='master'&&<MasterModal {...{products,crushers,jetties,busy}} entity={modal.entity} record={modal.record} onClose={()=>setModal(null)} onSubmit={(entity,payload)=>act(`master.${entity}.save`,payload,{legacy:true})}/>}
   {modal?.type==='measurement'&&<MeasurementModal scopeStock={stockpiles} {...{products,crushers,busy,csrf}} notify={text=>setToast(text)} initial={modal} onClose={()=>setModal(null)} onSubmit={payload=>act('measurement.create',payload,{legacy:true})}/>}
@@ -82,12 +84,13 @@ export function IntegratedWorkspace({user,csrf,logout,logoutError,onUnauthorized
  </div>;
 }
 
-function RequestForm({L,products,crushers,stockpiles,jetties,vessels,stockpileLocations,blocked,canManageLocations,onManageLocations,onClose,onSubmit}){
+function RequestForm({L,products,crushers,stockpiles,jetties,vessels,stockpileLocations,blocked,canManageLocations,onManageLocations,onClose,onSubmit,revision,dataStale,locale}){
  const [mode,setMode]=useState('MARINE'),[jettyId,setJetty]=useState(jetties.find(active)?.id||''),[vesselId,setVessel]=useState(''),[locationId,setLocation]=useState(''),[lines,setLines]=useState([{skuId:products.find(active)?.id||'',quantity:60,unit:'m3'}]);
  const availableVessels=vessels.filter(v=>active(v)&&v.jettyId===jettyId&&v.status==='loading');
  const effectiveVessel=availableVessels.some(v=>v.id===vesselId)?vesselId:availableVessels[0]?.id||'';
  const locations=array(stockpileLocations).filter(loc=>active(loc)&&array(loc.transportModes).includes(mode));
  const selectedLocation=locations.find(loc=>loc.id===locationId);
+ const skuStock=useTransferSkuStocks({mode,destinationCrusherId:mode==='LAND'?selectedLocation?.receivingCrusherId:undefined,revision});
  const receivingArea=crushers.find(c=>c.id===selectedLocation?.receivingCrusherId&&active(c));
  const missingSkus=mode==='LAND'&&selectedLocation?lines.filter(line=>!stockpiles.some(s=>active(s)&&s.crusherId===selectedLocation.receivingCrusherId&&s.skuId===line.skuId)).map(line=>products.find(p=>p.id===line.skuId)?.code||line.skuId):[];
  const landReady=mode!=='LAND'||!!receivingArea&&missingSkus.length===0;
@@ -116,7 +119,7 @@ function RequestForm({L,products,crushers,stockpiles,jetties,vessels,stockpileLo
    {missingSkus.length>0&&<div className="form-error" role="alert">{L('Area tujuan belum memiliki stockpile aktif untuk SKU: ','The destination has no active stockpile for SKU: ')}{missingSkus.join(', ')}</div>}
    {canManageLocations&&<Button variant="secondary" icon={Settings2} onClick={onManageLocations}>{L('Kelola lokasi stockpile','Manage stockpile locations')}</Button>}
    <h3 className="ig-form-section">{L('Produk yang diminta','Requested products')}</h3>
-   <div className="ig-request-lines">{lines.map((line,i)=>{const p=products.find(x=>x.id===line.skuId),volume=line.unit==='t'?n(line.quantity)/n(p?.densityTPerM3):n(line.quantity);return <div key={i} className="ig-request-line"><Field label="SKU"><select required value={line.skuId} onChange={e=>edit(i,'skuId',e.target.value)}>{products.filter(active).map(p=><option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}</select></Field><Field label={L('Kuantitas','Quantity')}><input type="number" min="0.01" max="1000000" step="0.01" required value={line.quantity} onChange={e=>edit(i,'quantity',e.target.value)}/></Field><Field label={L('Satuan','Unit')}><select value={line.unit} onChange={e=>edit(i,'unit',e.target.value)}><option value="m3">m³</option><option value="t">t</option></select></Field><div className="ig-line-convert">≈ {volume.toFixed(2)} m³<br/>{(volume*n(p?.densityTPerM3)).toFixed(2)} t</div>{lines.length>1&&<button type="button" className="ig-link danger" onClick={()=>setLines(lines.filter((_,j)=>j!==i))}>{L('Hapus','Remove')}</button>}</div>;})}</div>
+   <div className="ig-request-lines">{lines.map((line,i)=>{const p=products.find(x=>x.id===line.skuId),density=n(p?.densityTPerM3),validDensity=Number.isFinite(density)&&density>0,quantity=Number(line.quantity),volume=Number.isFinite(quantity)?line.unit==='t'?validDensity?quantity/density:null:quantity:null;return <div key={i} className="ig-request-line"><Field label="SKU"><select required value={line.skuId} onChange={e=>edit(i,'skuId',e.target.value)}>{products.filter(active).map(p=><option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}</select></Field><Field label={L('Kuantitas','Quantity')}><input type="number" min="0.01" max="1000000" step="0.01" required value={line.quantity} onChange={e=>edit(i,'quantity',e.target.value)}/></Field><Field label={L('Satuan','Unit')}><select value={line.unit} onChange={e=>edit(i,'unit',e.target.value)}><option value="m3">m³</option><option value="t">t</option></select></Field><div className="ig-line-convert"><small>{L('Muatan diminta','Requested load')}</small><br/>≈ {volume===null?'—':volume.toFixed(2)} m³<br/>{volume===null||!validDensity?'—':(volume*density).toFixed(2)} t</div>{lines.length>1&&<button type="button" className="ig-link danger" onClick={()=>setLines(lines.filter((_,j)=>j!==i))}>{L('Hapus','Remove')}</button>}<TransferSkuStock L={L} skuId={line.skuId} summary={skuStock.items.find(row=>row.skuId===line.skuId)} loading={skuStock.loading} error={skuStock.error} stale={skuStock.stale||dataStale} locale={locale} onRetry={skuStock.refresh}/></div>;})}</div>
    <Button variant="secondary" icon={Plus} disabled={lines.length>=6} onClick={()=>setLines([...lines,{skuId:products.find(active)?.id||'',quantity:30,unit:'m3'}])}>{L('Tambah SKU','Add SKU')}</Button>
    <div className="ig-form-note">{L('Density adalah konversi perencanaan. Tonase netto aktual wajib berasal dari input tare dan gross simulasi pada setiap ritase. Tujuan LAND harus memiliki stockpile aktif untuk setiap SKU.','Density is a planning conversion. Actual net tonnage requires simulated tare and gross inputs on every trip. LAND destinations must have an active stockpile for every SKU.')}</div>
    <div className="modal-actions"><Button variant="secondary" onClick={onClose}>{L('Batal','Cancel')}</Button><Button type="submit" disabled={blocked||!valid}>{L('Simpan permintaan','Save request')}</Button></div>
