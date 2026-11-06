@@ -2,7 +2,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import {isDispatchSourceArea} from '../shared/inventory-areas.mjs';
 import { applyAction, DomainError } from './domain.mjs';
 import {ensureStockpileLocations, stockpileLocationsForRead, applyStockpileLocationAction, resolveStockpileDestination, ensureReceivingStockpilesForRequest} from './stockpile-locations.mjs';
-import {scheduleAutomaticDispatch,automaticDispatchSummary,refreshAutomaticDispatchProgress as aggregate} from './automatic-dispatch.mjs';
+import {scheduleAutomaticDispatch,automaticDispatchSummary,truckAvailability,assertSerialDispatchClaims,refreshAutomaticDispatchProgress as aggregate} from './automatic-dispatch.mjs';
 export {allocateAutomaticDispatch,upgradeToAutomaticDispatch} from './automatic-dispatch.mjs';
 
 // This is an explicitly synthetic workflow over the existing operation document.
@@ -220,6 +220,7 @@ function moveTrip(s, action, p, actor, options) {
     t.weighingEvents.push({id: id('weigh'), type: 'TARE', weightT: numeric(p.weightT, 'Tare', true), status: 'PENDING', at: timestamp(), actorId: actor.id, source: SOURCE, synthetic: true});
   } else if (action === 'start') {
     isState('queued');
+    assertSerialDispatchClaims(s);
     const truck = row(s, 'trucks', t.truckId);
     if (!truck.active || !driverCatalog(options.drivers).some(d => d.id === t.assignedDriverUserId)) fail('Truk atau driver tidak aktif.', 'ASSIGNMENT_UNAVAILABLE', 409);
     if (s.trips.some(other => other.id !== t.id && active(other) && (other.truckId === t.truckId || other.assignedDriverUserId === t.assignedDriverUserId))) fail('Truk atau pengemudi masih menjalankan tugas lain.', 'TRUCK_OR_DRIVER_BUSY', 409);
@@ -310,11 +311,11 @@ export function integratedView(state, actor, options = {}) {
   view.stockpileLocations = stockpileLocationsForRead(state);
   const allTrips = state.trips;
   const fleet = state.trucks.map(truck => {
-    const trips = allTrips.filter(t => t.truckId === truck.id && open(t));
-    const current = trips.find(active);
-    const queued = trips.filter(t => t.status === 'queued').sort((a, b) => a.sequence - b.sequence);
-    const ownsCurrent = actor.role === 'admin' || current?.assignedDriverUserId === actor.id || actor.role === 'stock' && (actor.crusherIds || []).includes(current?.crusherId) || actor.role === 'jetty' && (actor.jettyIds || []).includes(current?.jettyId);
-    return {...truck, status: !truck.active ? 'unavailable' : current ? 'busy' : queued.length ? 'allocated' : 'available', activeTripId: ownsCurrent ? current?.id || null : null, queuedTrips: queued.length, nextTripId: actor.role === 'admin' || queued[0]?.assignedDriverUserId === actor.id ? queued[0]?.id || null : null, estimatedAvailableAt: current?.estimatedReturnAt || timestamp()};
+    const global = truckAvailability(state,truck);
+    const claims=allTrips.filter(t=>t.truckId===truck.id&&open(t));
+    const canSee=t=>!!t&&(actor.role==='admin'||t.assignedDriverUserId===actor.id||actor.role==='stock'&&((actor.crusherIds||[]).includes(t.crusherId)||(actor.crusherIds||[]).includes(t.destinationCrusherId))||actor.role==='jetty'&&(actor.jettyIds||[]).includes(t.jettyId));
+    const visibleDispatches=global.dispatchIds.filter(id=>claims.some(t=>t.dispatchId===id&&canSee(t)));
+    return {...truck,...global,dispatchId:visibleDispatches.includes(global.dispatchId)?global.dispatchId:null,dispatchIds:visibleDispatches,activeTripId:canSee(claims.find(t=>t.id===global.activeTripId))?global.activeTripId:null,nextTripId:canSee(claims.find(t=>t.id===global.nextTripId))?global.nextTripId:null};
   });
   const visible = t => integrated(t) && (actor.role === 'admin' || actor.role === 'driver' && t.assignedDriverUserId === actor.id || actor.role === 'stock' && ((actor.crusherIds || []).includes(t.crusherId) || (actor.crusherIds || []).includes(t.destinationCrusherId)) || actor.role === 'jetty' && (actor.jettyIds || []).includes(t.jettyId));
   view.trips = allTrips.filter(visible).map(t => {

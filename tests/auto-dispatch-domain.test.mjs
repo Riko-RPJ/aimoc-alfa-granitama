@@ -17,13 +17,20 @@ function fixture(){
 const act=(s,a,p,u=admin,o=opts)=>applyIntegratedAction(s,a,a==='request.create'?{destinationLocationId:'stockpile-location-crusher-2',...p}:p,u,o);
 function request(s,tonnes=60,o=opts){return act(s,'request.create',{transferMode:'MARINE',jettyId:'jetty-1',vesselId:'vessel-1',lines:[{skuId:'split-12',quantity:tonnes,unit:'t'}]},admin,o).entityId;}
 function unique(s){
- const assigned=s.trips.filter(t=>open(t)&&t.truckId),truckIds=assigned.map(t=>t.truckId),driverIds=assigned.map(t=>t.assignedDriverUserId);
- assert.equal(new Set(truckIds).size,truckIds.length);assert.equal(new Set(driverIds).size,driverIds.length);
+ const assigned=s.trips.filter(t=>open(t)&&t.truckId);
+ for(const field of ['truckId','assignedDriverUserId'])for(const value of new Set(assigned.map(t=>t[field]))){
+  const tasks=assigned.filter(t=>t[field]===value);
+  assert.equal(new Set(tasks.map(t=>t.dispatchId)).size,1,'A resource may claim only one unfinished dispatch');
+  assert.equal(new Set(tasks.map(t=>field==='truckId'?t.assignedDriverUserId:t.truckId)).size,1,'A serial claim keeps one truck/Driver pair');
+  assert.ok(tasks.filter(t=>t.startedAt||!['queued','waiting_truck'].includes(t.status)).length<=1,'At most one trip executes per resource');
+ }
  for(const t of assigned){const truck=s.trucks.find(x=>x.id===t.truckId);assert.ok(t.volumeM3<=truck.bedM3+0.00001);assert.ok(t.tonnageT<=truck.payloadLimitT+0.00001);}
 }
 function finish(s,identifier){
  const t=s.trips.find(x=>x.id===identifier),driver=drivers.find(d=>d.id===t.assignedDriverUserId),stock={id:'stock-user',role:'stock',crusherIds:[t.crusherId]},receiver=t.transferMode==='LAND'?{id:'destination-stock',role:'stock',crusherIds:[t.destinationCrusherId]}:{id:'jetty-user',role:'jetty',jettyIds:[t.jettyId]};
- act(s,'trip.qr',{tripId:t.id});act(s,'trip.tare',{tripId:t.id,weightT:20},stock);act(s,'trip.start',{tripId:t.id},driver);act(s,'trip.loading',{tripId:t.id},stock);act(s,'trip.gross',{tripId:t.id,weightT:20+t.tonnageT},stock);act(s,'trip.depart',{tripId:t.id},stock);act(s,'trip.arrive',{tripId:t.id},receiver);act(s,'trip.receive',{tripId:t.id},receiver);
+ if(!t.qrScannedAt)act(s,'trip.qr',{tripId:t.id});
+ if(!t.weighingEvents.some(e=>e.type==='TARE'))act(s,'trip.tare',{tripId:t.id,weightT:20},stock);
+ act(s,'trip.start',{tripId:t.id},driver);act(s,'trip.loading',{tripId:t.id},stock);act(s,'trip.gross',{tripId:t.id,weightT:20+t.tonnageT},stock);act(s,'trip.depart',{tripId:t.id},stock);act(s,'trip.arrive',{tripId:t.id},receiver);act(s,'trip.receive',{tripId:t.id},receiver);
  const waitingBefore=s.trips.filter(x=>x.status==='waiting_truck').map(x=>x.id);
  for(const identifier of waitingBefore)assert.equal(s.trips.find(x=>x.id===identifier).truckId,null,'Receipt must not release assigned fleet');
  act(s,'trip.return_start',{tripId:t.id},driver);unique(s);
@@ -32,37 +39,46 @@ function finish(s,identifier){
 
 test('automatic capacity allocation shares a stockpile across concurrent dispatches without double assigning trucks',()=>{
  const s=fixture(),a=request(s,60);const first=act(s,'request.plan',{requestId:a});
- assert.equal(first.autoAssignedTripIds.length,2);unique(s);
- assert.deepEqual(s.trips.filter(t=>t.truckId).map(t=>t.tonnageT).sort((x,y)=>x-y),[10,20]);
- assert.equal(s.trips.filter(t=>t.status==='waiting_truck').length,1);
+ assert.equal(first.autoAssignedTripIds.length,s.trips.length);unique(s);
+ assert.equal(new Set(s.trips.map(t=>t.truckId)).size,2);assert.equal(s.trips.reduce((sum,t)=>sum+t.tonnageT,0),60);
+ assert.equal(s.trips.filter(t=>t.status==='waiting_truck').length,0);
+ assert.ok(integratedView(s,admin,opts).fleet.every(t=>t.status==='allocated'));
  const b=request(s,40);act(s,'request.plan',{requestId:b});unique(s);
  assert.equal(s.dispatches.length,2);assert.ok(s.trips.every(t=>t.stockpileId==='stock-1-3'));
  assert.equal(s.stockpiles.find(p=>p.id==='stock-1-3').reservedM3,50);assert.equal(s.vessels[0].reservedT,100);
- const older=s.trips.find(t=>t.requestId===a&&t.status==='waiting_truck').id;
- const returned=finish(s,s.trips.find(t=>t.requestId===a&&t.truckId==='truck-2').id);
- assert.ok(returned.autoAssignedTripIds.includes(older));assert.equal(s.trips.find(t=>t.id===older).requestId,a);unique(s);
+ assert.ok(s.trips.filter(t=>t.requestId===b).every(t=>t.status==='waiting_truck'&&!t.truckId),'Another dispatch cannot borrow either claimed truck');
+ const ownQueue=s.trips.filter(t=>t.requestId===a&&t.truckId==='truck-2').sort((x,y)=>x.sequence-y.sequence);
+ for(const [index,task]of ownQueue.entries()){
+  finish(s,task.id);unique(s);
+  if(index<ownQueue.length-1)assert.ok(s.trips.filter(t=>t.requestId===b).every(t=>!t.truckId));
+ }
+ assert.ok(s.trips.some(t=>t.requestId===a&&t.truckId==='truck-1'&&open(t)),'The other truck still has prior dispatch work');
+ assert.ok(s.trips.some(t=>t.requestId===b&&t.truckId==='truck-2'),'Own final return releases the resource without waiting for the other truck');
  for(let guard=0;s.trips.some(open)&&guard<30;guard++){const task=s.trips.find(t=>open(t)&&t.truckId);assert.ok(task);finish(s,task.id);unique(s);}
  assert.ok(s.trips.every(t=>t.status==='returned'));assert.ok(s.requests.every(r=>r.status==='completed'));
  assert.equal(s.stockpiles.find(p=>p.id==='stock-1-3').onHandM3,50);assert.equal(s.stockpiles.find(p=>p.id==='stock-1-3').reservedM3,0);assert.equal(s.vessels[0].loadedT,100);assert.equal(s.vessels[0].reservedT,0);
  assert.equal(s.erpOutbox.length,s.trips.length*2);assert.equal(s.inventoryLedger.length,s.trips.length*2);
 });
 
-test('one 40t truck is allocated again only after verified return, never preassigned to the backlog',()=>{
+test('one 40t truck owns two preassigned serial trips and remains allocated between them',()=>{
  const s=fixture();s.trucks=s.trucks.slice(0,1);Object.assign(s.trucks[0],{bedM3:30,payloadLimitT:40});
  const requestId=request(s,80);act(s,'request.plan',{requestId});
- const first=s.trips.find(t=>t.status==='queued'),waiting=s.trips.find(t=>t.status==='waiting_truck');
- assert.equal(first.tonnageT,40);assert.equal(waiting.tonnageT,40);assert.equal(waiting.truckId,null);assert.equal(waiting.assignedDriverUserId,null);
- assert.deepEqual(integratedView(s,admin,opts).trips.find(t=>t.id===waiting.id).allowedActions,[]);
- assert.throws(()=>act(s,'trip.qr',{tripId:waiting.id}),e=>e.code==='WAITING_FOR_TRUCK');
- assert.throws(()=>act(s,'trip.start',{tripId:waiting.id},drivers[0]),e=>e.status===403);
- const result=finish(s,first.id);assert.deepEqual(result.autoAssignedTripIds,[waiting.id]);assert.equal(s.trips.find(t=>t.id===waiting.id).truckId,'truck-1');unique(s);
- finish(s,waiting.id);assert.equal(s.requests.find(r=>r.id===requestId).status,'completed');
+ const [first,next]=s.trips.filter(t=>t.status==='queued').sort((a,b)=>a.sequence-b.sequence);
+ assert.equal(first.tonnageT,40);assert.equal(next.tonnageT,40);assert.equal(next.truckId,'truck-1');assert.equal(next.assignedDriverUserId,drivers[0].id);
+ assert.equal(integratedView(s,admin,opts).fleet[0].status,'allocated');
+ assert.throws(()=>act(s,'trip.start',{tripId:next.id},drivers[0]),e=>e.code==='QUEUE_ORDER');
+ act(s,'trip.qr',{tripId:next.id});act(s,'trip.tare',{tripId:next.id,weightT:20},{id:'stock-prescan',role:'stock',crusherIds:[next.crusherId]});
+ assert.equal(integratedView(s,admin,opts).fleet[0].status,'allocated','QR/tare pre-scan is not active execution');
+ finish(s,first.id);assert.equal(s.trips.find(t=>t.id===next.id).truckId,'truck-1');unique(s);
+ assert.equal(integratedView(s,admin,opts).fleet[0].status,'allocated');
+ finish(s,next.id);assert.equal(s.requests.find(r=>r.id===requestId).status,'completed');
+ assert.equal(integratedView(s,admin,opts).fleet[0].status,'available');
 });
 
 test('waiting cargo can reserve stock without any free Driver; allocator resumes automatically when one becomes active',()=>{
  const s=fixture(),empty={drivers:[]};const requestId=request(s,60,empty);const result=act(s,'request.plan',{requestId},admin,empty);
  assert.equal(result.autoAssignedTripIds.length,0);assert.equal(result.autoDispatch.waitingT,60);assert.ok(s.trips.every(t=>t.status==='waiting_truck'&&!t.truckId));
- const allocated=allocateAutomaticDispatch(s,opts,admin);assert.equal(allocated.assignedTripIds.length,2);unique(s);
+ const allocated=allocateAutomaticDispatch(s,opts,admin);assert.equal(allocated.assignedTripIds.length,s.trips.length);assert.equal(new Set(s.trips.map(t=>t.truckId)).size,2);assert.ok(s.trips.every(t=>t.status==='queued'));unique(s);
 });
 
 test('manual assignment is rejected and insufficient shared SKU stock rolls the whole plan back',()=>{
@@ -89,7 +105,7 @@ function oldQueues(){
 
 test('cutover preserves the IDs, quantities and balances of twelve unexecuted repeated old assignments',()=>{
  const s=oldQueues(),before=structuredClone(s);const migration=upgradeToAutomaticDispatch(s,opts,admin);
- assert.equal(migration.detachedTripIds.length,12);assert.equal(migration.assignedTripIds.length,2);assert.equal(s.trips.filter(t=>t.status==='waiting_truck').length,10);unique(s);
+ assert.equal(migration.detachedTripIds.length,12);assert.equal(migration.assignedTripIds.length,12);assert.equal(s.trips.filter(t=>t.status==='waiting_truck').length,0);unique(s);
  for(const old of before.trips){const t=s.trips.find(x=>x.id===old.id);assert.equal(t.tonnageT,old.tonnageT);assert.equal(t.volumeM3,old.volumeM3);assert.equal(t.assignmentHistory.length,1);assert.equal(t.assignmentHistory[0].truckId,old.truckId);}
  for(const key of ['stockpiles','vessels','inventoryLedger','erpOutbox'])assert.deepEqual(s[key],before[key]);
  assert.equal(upgradeToAutomaticDispatch(s,opts,admin).replayed,true);unique(s);
@@ -98,7 +114,37 @@ test('cutover preserves the IDs, quantities and balances of twelve unexecuted re
 test('cutover retains queued evidence and refuses overlapping proof instead of deleting it',()=>{
  const s=oldQueues();s.trips[0].qrScannedAt=new Date().toISOString();s.trips[0].weighingEvents=[{id:'old-pending-tare',type:'TARE',weightT:20,status:'PENDING'}];const proof=structuredClone(s.trips[0]);
  upgradeToAutomaticDispatch(s,opts,admin);assert.deepEqual(s.trips[0],proof);unique(s);
- const conflicting=oldQueues();conflicting.trips[0].qrScannedAt='2026-11-07T00:00:00Z';conflicting.trips[2].qrScannedAt='2026-11-07T00:00:01Z';const before=structuredClone(conflicting);
+ const conflicting=oldQueues();Object.assign(conflicting.trips[0],{status:'start_pending',startedAt:'2026-11-07T00:00:00Z'});Object.assign(conflicting.trips[2],{status:'loading',startedAt:'2026-11-07T00:00:01Z'});const before=structuredClone(conflicting);
  assert.throws(()=>upgradeToAutomaticDispatch(conflicting,opts,admin),e=>e.code==='AUTO_DISPATCH_REVIEW_REQUIRED');assert.deepEqual(conflicting,before);
  const eventOnly=oldQueues();eventOnly.events.push({id:'retained-old-qr',entityId:eventOnly.trips[0].id,type:'trip.qr'});const historical=structuredClone(eventOnly.trips[0]);upgradeToAutomaticDispatch(eventOnly,opts,admin);assert.deepEqual(eventOnly.trips[0],historical);unique(eventOnly);
+});
+
+test('guarded allocation rehearsal expands old waiting cargo without rewriting an in-transit trip or accounting proof',()=>{
+ const s=fixture();s.trucks=s.trucks.slice(0,1);Object.assign(s.trucks[0],{bedM3:30,payloadLimitT:40});
+ const requestId=request(s,120);act(s,'request.plan',{requestId});
+ const [first,...tail]=s.trips.filter(t=>t.requestId===requestId).sort((a,b)=>a.sequence-b.sequence);
+ const stock={id:'proof-origin',role:'stock',crusherIds:[first.crusherId]};
+ act(s,'trip.qr',{tripId:first.id});act(s,'trip.tare',{tripId:first.id,weightT:20},stock);
+ act(s,'trip.start',{tripId:first.id},drivers[0]);act(s,'trip.loading',{tripId:first.id},stock);
+ act(s,'trip.gross',{tripId:first.id,weightT:60},stock);act(s,'trip.depart',{tripId:first.id},stock);
+ assert.equal(s.trips.find(t=>t.id===first.id).status,'in_transit');
+ // Reconstruct the old automatic representation in this isolated fixture:
+ // one actual 40t execution, followed by one unassigned 80t cargo row.
+ const pending={...structuredClone(tail[0]),status:'waiting_truck',tonnageT:80,
+  volumeM3:tail.reduce((sum,t)=>sum+t.volumeM3,0),truckId:null,assignedDriverUserId:null,assignedDriverName:null,
+  assignmentHold:'NO_AVAILABLE_TRUCK',assignedAt:null,estimatedStartAt:null,estimatedReturnAt:null};
+ const removed=new Set(tail.map(t=>t.id));s.trips=s.trips.filter(t=>!removed.has(t.id));s.trips.push(pending);
+ s.dispatches.find(d=>d.id===first.dispatchId).tripIds=[first.id,pending.id];
+ s.events=s.events.filter(e=>!removed.has(e.entityId));
+ s.automaticDispatchUpgrade={version:1,actorId:admin.id,detachedTripIds:[],beforeSha256:'synthetic-original-cutover-proof'};
+ const before=structuredClone(s),original=s.trips.find(t=>t.id===first.id);
+ const result=allocateAutomaticDispatch(s,opts,admin);
+ assert.deepEqual(s.trips.find(t=>t.id===first.id),original,'Actual execution and all QR/weight evidence stay byte-for-byte identical');
+ for(const key of ['stockpiles','vessels','inventoryLedger','erpOutbox','automaticDispatchUpgrade'])assert.deepEqual(s[key],before[key],key+' must not change during assignment-only upgrade');
+ assert.deepEqual(s.events.slice(0,before.events.length),before.events,'Prior audit events remain intact');
+ const future=s.trips.filter(t=>t.dispatchId===first.dispatchId&&t.status==='queued');
+ assert.equal(future.length,2);assert.ok(future.some(t=>t.id===pending.id),'Canonical old waiting ID is retained');
+ assert.equal(result.assignedTripIds.length,2);assert.ok(future.every(t=>t.truckId===first.truckId&&t.assignedDriverUserId===first.assignedDriverUserId));
+ assert.equal(s.trips.reduce((sum,t)=>sum+t.tonnageT,0),120);close(s.trips.reduce((sum,t)=>sum+t.volumeM3,0),60);
+ assert.equal(integratedView(s,admin,opts).fleet[0].status,'busy');unique(s);
 });

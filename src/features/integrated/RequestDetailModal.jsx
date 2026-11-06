@@ -9,7 +9,7 @@ const list=value=>Array.isArray(value)?value:[];
 const closed=new Set(['returned','completed','cancelled']);
 const received=new Set(['unloaded','returning','returned']);
 const stateLabels={
- requested:['Diminta','Requested'],planned:['Terencana','Planned'],allocated:['Teralokasi','Allocated'],
+ requested:['Diminta','Requested'],planned:['Terencana','Planned'],allocated:['Dialokasi','Allocated'],
  queued:['Antre','Queued'],start_pending:['Menunggu QR / tare','Awaiting QR / tare'],ready_to_load:['Siap muat','Ready to load'],
  loading:['Memuat','Loading'],weighed:['Timbang selesai','Weighed'],in_transit:['Dalam perjalanan','In transit'],
  arrived:['Tiba','Arrived'],unloaded:['Diterima / bongkar','Received / unloaded'],returning:['Perjalanan kembali','Returning'],

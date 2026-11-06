@@ -58,9 +58,10 @@ test('normal authenticated handler integrates an 80t marine request over two ser
   const trips=planned.state.trips;
   assert.equal(trips.length,2);assert.equal(new Set(trips.map(x=>x.dispatchId)).size,1);
   assert.ok(trips.every(x=>x.source==='INTEGRATED_DEMO'&&x.tonnageT===40));
-  assert.equal(trips.filter(x=>x.truckId===state.trucks[0].id&&x.assignedDriverUserId===actors.driver.id).length,1);
-  assert.equal(trips.filter(x=>x.status==='waiting_truck'&&x.truckId===null&&x.assignedDriverUserId===null).length,1);
-  assert.equal((await context('driver')).state.trips.length,1);
+  assert.equal(trips.filter(x=>x.truckId===state.trucks[0].id&&x.assignedDriverUserId===actors.driver.id).length,2);
+  assert.equal(trips.filter(x=>x.status==='waiting_truck').length,0);
+  assert.equal((await context('driver')).state.trips.length,2);
+  assert.equal(planned.state.trucks[0].status,'allocated');
   assert.equal((await context('jetty2')).state.trips.length,0);
   assert.equal((await context('stock1')).drivers.length,0);
   const originalStock=new Map(planned.state.stockpiles.map(x=>[x.id,x.onHandM3]));
@@ -74,11 +75,12 @@ test('normal authenticated handler integrates an 80t marine request over two ser
     await ok('trip.qr',{tripId:trip.id,externalEventId:'qr-'+i});
     const tare=await ok('trip.tare',{tripId:trip.id,weightT:25,externalEventId:'tare-'+i},source);
     assert.equal(tare.state.trips.find(x=>x.id===trip.id).status,'queued');
+    assert.equal(tare.state.trucks[0].status,'allocated','Pre-start QR/tare alone do not mean a truck is working');
     assert.equal((await action('trip.depart',{tripId:trip.id},source)).status,409);
     const started=await ok('trip.start',{tripId:trip.id},'driver');
     assert.equal(started.state.trips.find(x=>x.id===trip.id).status,'ready_to_load');
     if(i===0){
-      assert.equal((await action('trip.start',{tripId:trips[1].id},'driver')).status,403);
+      const blocked=await action('trip.start',{tripId:trips[1].id},'driver');assert.equal(blocked.status,409);assert.equal(blocked.body.error,'TRUCK_OR_DRIVER_BUSY');
       const masterBypass=await call('/api/action','POST',{action:'master.truck.save',payload:{id:trip.truckId,active:false},requestId:randomUUID()},'admin');
       assert.equal(masterBypass.status,409);assert.equal(masterBypass.body.error,'ACTIVE_INTEGRATED_ASSIGNMENT');
       const bypass=await call('/api/action','POST',{action:'trip.depart',payload:{tripId:trip.id,tareT:25,grossT:65},requestId:randomUUID()},'admin');
@@ -104,7 +106,7 @@ test('normal authenticated handler integrates an 80t marine request over two ser
     const received=await ok('trip.receive',{tripId:trip.id,externalEventId:'receipt-'+i},'jetty1');
     assert.equal(received.state.vessels.find(x=>x.id==='vessel-1').loadedT,(i+1)*40);
     assert.equal((await action('trip.receive',{tripId:trip.id},'jetty1')).status,409);
-    if(i===0)assert.equal((await action('trip.start',{tripId:trips[1].id},'driver')).status,403);
+    if(i===0){const blocked=await action('trip.start',{tripId:trips[1].id},'driver');assert.equal(blocked.status,409);assert.equal(blocked.body.error,'TRUCK_OR_DRIVER_BUSY');}
     assert.equal((await action('trip.return',{tripId:trip.id},source)).status,409);
     await ok('trip.return_start',{tripId:trip.id},'driver');
     await ok('trip.return',{tripId:trip.id},source);
