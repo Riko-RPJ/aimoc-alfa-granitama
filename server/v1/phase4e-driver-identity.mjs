@@ -1,4 +1,5 @@
 import {randomUUID} from 'node:crypto';
+import {reconcilePendingWeighbridgeEventsInTransaction} from './phase4b-weighbridge.mjs';
 const fail=(code,message,status=409)=>{throw Object.assign(new Error(message),{code,status});};
 const one=async(db,sql,args=[])=> (await db.query(sql,args)).rows[0];
 const valid=x=>typeof x==='string'&&/^[A-Za-z0-9:._/-]{6,150}$/.test(x);
@@ -29,6 +30,10 @@ export async function verifyDriverBinding(db,{actorId,driverId,verifiedIdentityR
   if(b.identity_evidence_ref!==verifiedIdentityRef)
     fail('IDENTITY_EVIDENCE_MISMATCH','Independent authority evidence reference differs');
   await c.query("UPDATE aimoc_execution_v1.driver_identity_bindings SET status='ACTIVE',verified_by=$1,verified_at=now() WHERE driver_id=$2",[actorId,driverId]);
+  const pending=(await c.query(`SELECT DISTINCT t.id FROM aimoc_execution_v1.trips t
+    JOIN aimoc_execution_v1.weighbridge_inbox e ON e.trip_id=t.id AND e.processing_status='PENDING'
+    WHERE t.driver_id=$1 ORDER BY t.id`,[driverId])).rows;
+  for(const trip of pending)await reconcilePendingWeighbridgeEventsInTransaction(c,{tripId:trip.id});
   return {driver_id:driverId,status:'ACTIVE',user_id:b.user_id};
  });
 }

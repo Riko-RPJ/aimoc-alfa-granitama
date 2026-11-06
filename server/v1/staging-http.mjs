@@ -21,7 +21,7 @@ export function createStagingApiHandler({legacyDb,executionDb,sourceSecrets={}})
    'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(JSON.stringify(data));};
   const url=new URL(req.url,'http://staging.local'),path=url.pathname.replace(/\/$/,'');
   const method=req.method;
-  if(!path.startsWith('/api/v1/')||path==='/api/v1/session')return legacy(req,res);
+  if(!path.startsWith('/api/v1/')||path==='/api/v1/session'||path.startsWith('/api/v1/demo/'))return legacy(req,res);
   try{
    const sourceRequest=path==='/api/v1/integrations/weighbridge/events'&&method==='POST';
    if(sourceRequest){

@@ -110,24 +110,25 @@ export async function stagingV1({db,actor,req,path,method,body={},rawBody,source
      FROM aimoc_execution_v1.crusher_location_refs WHERE status='ACTIVE' ORDER BY crusher_name`),
     db.query(`SELECT loading_point_id,crusher_id,loading_point_name,verification_status
      FROM aimoc_execution_v1.loading_point_refs WHERE verification_status<>'SUSPENDED' ORDER BY loading_point_name`),
-    db.query(`SELECT f.truck_id,f.payload_limit_t FROM aimoc_execution_v1.fleet_vehicle_specs f
-     WHERE f.active=true AND NOT EXISTS (SELECT 1 FROM aimoc_execution_v1.resource_claims c
-     WHERE c.truck_id=f.truck_id AND c.released_at IS NULL)
-     AND NOT EXISTS (SELECT 1 FROM aimoc_execution_v1.trip_driver_assignments a
+    db.query(`SELECT f.truck_id,f.payload_limit_t,
+     NOT EXISTS (SELECT 1 FROM aimoc_execution_v1.resource_claims c
+       WHERE c.truck_id=f.truck_id AND c.released_at IS NULL) AS available_now,
+     (SELECT count(*)::int FROM aimoc_execution_v1.trip_driver_assignments a
       JOIN aimoc_execution_v1.trips t ON t.id=a.trip_id
       WHERE a.truck_id=f.truck_id AND a.status='ASSIGNED'
-      AND t.status NOT IN ('RETURNED_AVAILABLE','CANCELLED'))
+      AND t.status='QUEUED') AS queued_trips
+     FROM aimoc_execution_v1.fleet_vehicle_specs f WHERE f.active=true
      ORDER BY f.truck_id`),
-    db.query(`SELECT p.id AS driver_id,p.display_name
+    db.query(`SELECT p.id AS driver_id,p.display_name,
+     NOT EXISTS (SELECT 1 FROM aimoc_execution_v1.resource_claims c
+       WHERE c.driver_id=p.id AND c.released_at IS NULL) AS available_now,
+     (SELECT count(*)::int FROM aimoc_execution_v1.trip_driver_assignments a
+       JOIN aimoc_execution_v1.trips t ON t.id=a.trip_id
+       WHERE a.driver_id=p.id AND a.status='ASSIGNED' AND t.status='QUEUED') AS queued_trips
      FROM aimoc_execution_v1.driver_profiles p
      JOIN aimoc_execution_v1.driver_identity_bindings b ON b.driver_id=p.id
       AND b.user_id=p.external_user_id AND b.status='ACTIVE' AND b.verified_at IS NOT NULL
-     WHERE p.active=true AND NOT EXISTS (SELECT 1 FROM aimoc_execution_v1.resource_claims c
-      WHERE c.driver_id=p.id AND c.released_at IS NULL)
-     AND NOT EXISTS (SELECT 1 FROM aimoc_execution_v1.trip_driver_assignments a
-      JOIN aimoc_execution_v1.trips t ON t.id=a.trip_id
-      WHERE a.driver_id=p.id AND a.status='ASSIGNED'
-      AND t.status NOT IN ('RETURNED_AVAILABLE','CANCELLED'))
+     WHERE p.active=true
      ORDER BY p.display_name,p.id`)
    ]);
    const optional=async(table,sql)=> {
@@ -154,21 +155,13 @@ export async function stagingV1({db,actor,req,path,method,body={},rawBody,source
    role(actor,['admin']);
    const identityTable=await one(db,"SELECT to_regclass('aimoc_execution_v1.driver_identity_bindings') AS oid");
    if(!identityTable?.oid)reject(501,'DRIVER_IDENTITY_NOT_INTEGRATED','Verified Driver identity source is not provisioned');
-   const items=(await db.query(`SELECT p.id AS driver_id,p.display_name,p.external_user_id AS driver_user_id
+   const items=(await db.query(`SELECT p.id AS driver_id,p.display_name,p.external_user_id AS driver_user_id,
+    NOT EXISTS (SELECT 1 FROM aimoc_execution_v1.resource_claims c
+      WHERE c.driver_id=p.id AND c.released_at IS NULL) AS available_now
     FROM aimoc_execution_v1.driver_profiles p
     JOIN aimoc_execution_v1.driver_identity_bindings b ON b.driver_id=p.id
       AND b.user_id=p.external_user_id AND b.status='ACTIVE' AND b.verified_at IS NOT NULL
     WHERE p.active=true
-      AND NOT EXISTS (
-        SELECT 1 FROM aimoc_execution_v1.resource_claims c
-        WHERE c.driver_id=p.id AND c.released_at IS NULL
-      )
-      AND NOT EXISTS (
-        SELECT 1 FROM aimoc_execution_v1.trip_driver_assignments a
-        JOIN aimoc_execution_v1.trips t ON t.id=a.trip_id
-        WHERE a.driver_id=p.id AND a.status='ASSIGNED'
-          AND t.status NOT IN ('RETURNED_AVAILABLE','CANCELLED')
-      )
     ORDER BY p.display_name,p.id LIMIT 200`)).rows;
    return envelope('assignable_drivers',{items},items.length?'READY':'EMPTY');
  }

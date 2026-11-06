@@ -4,6 +4,7 @@ import {applyAction,publicState} from './domain.mjs';
 import {projectV1Read,isV1UnimplementedMutation} from './v1/read-model.mjs';
 import {permissionsForRole,authorizeLegacyAction,TARGET_ADMIN_CAPABILITIES} from './role-permissions.mjs';
 import {listCrusherLoadingPoints,saveCrusherLoadingPoint} from './crusher-location-master.mjs';
+import {handleIntegratedDemo,guardLegacyIntegratedMutation} from './integrated-demo-http.mjs';
 
 const fail=(status,code,message)=>{throw Object.assign(new Error(message),{status,code});};
 const validId=x=>typeof x==='string'&&/^[\w-]{1,100}$/.test(x);
@@ -57,7 +58,7 @@ export function createHandler(db,{secure=false}={}) {
           'SELECT trip_id,status,started_at,completed_at FROM aimoc_alfa_ops.truck_task_uat_progress WHERE truck_id=$1',
           [truck.id])).rows;
         const progress=new Map(progressRows.map(r=>[r.trip_id,r]));
-        const allTrips=(state.trips||[]).filter(t=>t.truckId===truck.id&&
+        const allTrips=(state.trips||[]).filter(t=>t.source!=='INTEGRATED_DEMO'&&t.truckId===truck.id&&
           !['returned','cancelled'].includes(t.status)).sort((a,b)=>(a.sequence??0)-(b.sequence??0)||a.id.localeCompare(b.id));
         const current=allTrips.find(t=>progress.get(t.id)?.status!=='COMPLETED');
         const demoAvailable=allTrips.length>0&&allTrips.every(t=>progress.get(t.id)?.status==='COMPLETED');
@@ -113,6 +114,7 @@ export function createHandler(db,{secure=false}={}) {
             .sort((a,b)=>(a.sequence??0)-(b.sequence??0)||a.id.localeCompare(b.id));
           const target=all.find(t=>t.id===body.tripId);
           if(!target)fail(403,'TRIP_TRUCK_MISMATCH','Trip is not assigned to this truck');
+          if(target.source==='INTEGRATED_DEMO')fail(409,'INTEGRATED_WORKFLOW_REQUIRED','Use the authenticated integrated Driver workspace.');
           const qr=(await c.query('SELECT trip_id FROM aimoc_alfa_ops.truck_qr_uat_events WHERE truck_id=$1 LIMIT 1',[truck.id])).rows[0];
           if(!qr)fail(409,'QR_NOT_SCANNED','Awaiting authorized QR simulation for truck');
           const progress=(await c.query('SELECT trip_id,status FROM aimoc_alfa_ops.truck_task_uat_progress WHERE truck_id=$1',[truck.id])).rows;
@@ -205,6 +207,7 @@ export function createHandler(db,{secure=false}={}) {
         const found=(await db.query('SELECT document FROM aimoc_alfa_ops.operation WHERE id=1')).rows[0];
         if(!found)fail(503,'NOT_INITIALIZED','Legacy dispatch not available');
         const trip=(found.document.trips||[]).find(t=>t.id===body.tripId);
+        if(trip?.source==='INTEGRATED_DEMO')fail(409,'INTEGRATED_WORKFLOW_REQUIRED','Use the integrated QR event action.');
         if(!trip||trip.truckId!==body.truckId||!trip.dispatchId)
           fail(409,'TRIP_TRUCK_MISMATCH','Trip is not assigned to the selected truck.');
         if(['returned','cancelled'].includes(trip.status))
@@ -224,13 +227,14 @@ export function createHandler(db,{secure=false}={}) {
           physicalScanVerified:false,tripId:trip.id,truckId:trip.truckId,scannedAt:event.scanned_at,
           legacyTripStatus:trip.status,accessToken});
       }
+      if(path.startsWith('/api/v1/demo/'))return await handleIntegratedDemo({db,path,method,req,actor,send,parseBody});
       if(method==='GET'&&path==='/api/me')return send(200,{user:actor,csrfToken:auth.csrf_token});
       if(method==='GET'&&path==='/api/capabilities'){
         const permissions=permissionsForRole(actor.role);
         return send(200,{source:'LEGACY_AUTHORIZATION',role:actor.role,permissions,
           locationScope:{crusherIds:actor.crusherIds||[],jettyIds:actor.jettyIds||[]},
           features:actor.role==='admin'?TARGET_ADMIN_CAPABILITIES:[],
-          targetWritesEnabled:false,driverProductionIntegrated:false});
+          targetWritesEnabled:false,driverProductionIntegrated:false,integratedDemoEnabled:true,integratedDemoSource:'INTEGRATED_DEMO'});
       }
 
       if(method==='POST'&&path==='/api/logout'){await db.query('DELETE FROM aimoc_alfa_ops.sessions WHERE token_hash=$1',[hash(session)]);return send(200,{ok:true},{'Set-Cookie':sessionCookie('',secure,0)});}
@@ -300,6 +304,7 @@ export function createHandler(db,{secure=false}={}) {
             if(payload.method==='camera_pending'&&!payload.evidenceId)fail(400,'EVIDENCE_REQUIRED','Unggah foto sebelum menyimpan bukti kamera.');
           }
           const state=structuredClone(locked.document);
+          guardLegacyIntegratedMutation(state,body.action,payload);
           const actionResult=applyAction(state,body.action,payload,actor)||{message:'Tersimpan'};
           await c.query('UPDATE aimoc_alfa_ops.operation SET document=$1::jsonb,revision=revision+1,updated_at=now() WHERE id=1',[JSON.stringify(state)]);
           await c.query('INSERT INTO aimoc_alfa_ops.actions(actor_id,request_id,payload_hash,result) VALUES($1,$2,$3,$4::jsonb)',[actor.id,body.requestId,payloadHash,JSON.stringify(actionResult)]);
@@ -311,7 +316,7 @@ export function createHandler(db,{secure=false}={}) {
         if(method==='GET')return send(200,{users:(await db.query('SELECT * FROM aimoc_alfa_ops.users ORDER BY created_at')).rows.map(userView)});
         if(method==='POST'){
           const b=await parseBody(req);const username=String(b.username||'').trim().toLowerCase().replace(/@aimoc\.local$/,'');
-          if(!/^[a-z0-9._-]{3,60}$/.test(username)||!['admin','stock','jetty'].includes(b.role)||!b.displayName?.trim())fail(400,'INVALID_USER','Lengkapi username, nama, dan peran.');
+          if(!/^[a-z0-9._-]{3,60}$/.test(username)||!['admin','stock','jetty','driver'].includes(b.role)||!b.displayName?.trim())fail(400,'INVALID_USER','Lengkapi username, nama, dan peran.');
           const crusherIds=Array.isArray(b.crusherIds)?b.crusherIds.filter(validId):[],jettyIds=Array.isArray(b.jettyIds)?b.jettyIds.filter(validId):[];
           if((b.role==='stock'&&!crusherIds.length)||(b.role==='jetty'&&!jettyIds.length))fail(400,'USER_SCOPE','Tentukan lokasi operator.');
           const masters=(await db.query('SELECT document FROM aimoc_alfa_ops.operation WHERE id=1')).rows[0].document;
@@ -346,6 +351,7 @@ export function createHandler(db,{secure=false}={}) {
     } catch(error) {
       const status=error.status||error.statusCode||500;
       if(error.code==='23505')return send(409,{error:'DUPLICATE',message:'Kode atau username sudah terdaftar.'});
+      if(error.code==='23514'&&error.constraint==='users_role_check')return send(503,{error:'SCHEMA_MIGRATION_REQUIRED',message:'Database perlu migrasi role Driver melalui setup Admin sebelum akun dapat dibuat.'});
       if(error.code==='42P01'||error.code==='ECONNREFUSED')return send(503,{error:'DATABASE_UNAVAILABLE',message:'Penyimpanan tidak tersedia.'});
       return send(status,{error:error.code||'REQUEST_REJECTED',message:status<500?String(error.message||'Permintaan ditolak.').slice(0,250):'Proses belum berhasil. Silakan muat ulang.'});
     }

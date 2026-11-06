@@ -29,16 +29,14 @@ const shape=x=>{
  const total=scaled(x.planned_quantity_t);
  if(!Array.isArray(x.trips)||x.trips.length<1||x.trips.length>50)
   fail('TRIP_COUNT_INVALID','One to fifty explicit trip assignments required',400);
- const ids=new Set(),assignments=new Set(),drivers=new Set(),trucks=new Set();
+ const ids=new Set(),assignments=new Set();
  let sum=0n;
  for(const t of x.trips){
   keys(t,['trip_id','assignment_id','sequence_no','driver_id','truck_id','planned_quantity_t']);
   if(![t.trip_id,t.assignment_id,t.driver_id,t.truck_id].every(id))
    fail('TRIP_REFERENCE_INVALID','Trip, assignment, Driver and truck IDs required',400);
   if(ids.has(t.trip_id)||assignments.has(t.assignment_id))fail('DUPLICATE_ASSIGNMENT','Trip and assignment IDs must be unique',400);
-  if(drivers.has(t.driver_id)||trucks.has(t.truck_id))fail('DUPLICATE_ASSIGNMENT','Each trip must have a distinct Driver and truck',400);
   ids.add(t.trip_id);assignments.add(t.assignment_id);
-  drivers.add(t.driver_id);trucks.add(t.truck_id);
   if(!Number.isInteger(t.sequence_no)||t.sequence_no<1||t.sequence_no>x.trips.length)
    fail('TRIP_SEQUENCE_INVALID','Trip sequence must be contiguous from 1',400);
   sum+=scaled(t.planned_quantity_t);
@@ -86,6 +84,11 @@ export async function createUnifiedDispatch(db,{actorId,idempotencyKey,body}={})
      slot.jetty_id!==input.destination_location_id)fail('MARINE_SLOT_NOT_READY','Matching authorized voyage and jetty slot required');
   }
   const identityTable=await one(c,"SELECT to_regclass('aimoc_execution_v1.driver_identity_bindings') AS oid");
+  // Acquire each fleet master once in a stable order across multi-trip requests.
+  await c.query('SELECT id FROM aimoc_execution_v1.driver_profiles WHERE id=ANY($1::text[]) ORDER BY id FOR UPDATE',
+   [[...new Set(input.trips.map(t=>t.driver_id))].sort()]);
+  await c.query('SELECT truck_id FROM aimoc_execution_v1.fleet_vehicle_specs WHERE truck_id=ANY($1::text[]) ORDER BY truck_id FOR UPDATE',
+   [[...new Set(input.trips.map(t=>t.truck_id))].sort()]);
   const trips=[];
   for(const t of [...input.trips].sort((a,b)=>a.sequence_no-b.sequence_no)){
    const [driver,truck]=await Promise.all([
@@ -93,20 +96,8 @@ export async function createUnifiedDispatch(db,{actorId,idempotencyKey,body}={})
     one(c,'SELECT truck_id,payload_limit_t FROM aimoc_execution_v1.fleet_vehicle_specs WHERE truck_id=$1 AND active=true FOR UPDATE',[t.truck_id])
    ]);
    if(!driver||!truck)fail('DRIVER_TRUCK_NOT_ACTIVE','Authoritative active Driver and truck required');
-   const existingAssignment=await one(c,`SELECT a.trip_id FROM aimoc_execution_v1.trip_driver_assignments a
-    JOIN aimoc_execution_v1.trips active_trip ON active_trip.id=a.trip_id
-    WHERE a.driver_id=$1 AND a.status='ASSIGNED'
-      AND active_trip.status NOT IN ('RETURNED_AVAILABLE','CANCELLED') LIMIT 1`,[t.driver_id]);
-   if(existingAssignment)fail('DRIVER_ALREADY_ASSIGNED','Driver has another unclosed assignment',409);
-   const existingTruck=await one(c,`SELECT a.trip_id FROM aimoc_execution_v1.trip_driver_assignments a
-    JOIN aimoc_execution_v1.trips t ON t.id=a.trip_id
-    WHERE a.truck_id=$1 AND a.status='ASSIGNED'
-    AND t.status NOT IN ('RETURNED_AVAILABLE','CANCELLED') LIMIT 1`,[t.truck_id]);
-   if(existingTruck)fail('TRUCK_ALREADY_ASSIGNED','Truck has another unclosed assignment',409);
-   const claimed=await one(c,`SELECT id FROM aimoc_execution_v1.resource_claims
-    WHERE released_at IS NULL AND (truck_id=$1 OR driver_id=$2) LIMIT 1`,
-    [t.truck_id,t.driver_id]);
-   if(claimed)fail('DRIVER_TRUCK_BUSY','Truck or Driver is occupied by an active trip',409);
+   // Future trips may share a truck/Driver, including a resource currently in transit.
+   // Start enforces FIFO and claims; planning never makes a busy vehicle available.
    if(identityTable?.oid){
     const binding=await one(c,`SELECT status,verified_at FROM aimoc_execution_v1.driver_identity_bindings
      WHERE driver_id=$1 AND user_id=$2`,[driver.id,driver.external_user_id]);

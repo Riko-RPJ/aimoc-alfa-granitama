@@ -22,5 +22,6 @@ export const lookup = (xs, id) => xs.find(x => x.id === id);
 export const roleName = localize({
   admin: 'Administrator',
   stock: 'Operator stockpile',
-  jetty: 'Operator jetty'
+  jetty: 'Operator jetty',
+  driver: 'Pengemudi'
 });

@@ -1,0 +1,449 @@
+import { randomUUID, createHash } from 'node:crypto';
+import { applyAction, DomainError } from './domain.mjs';
+
+// This is an explicitly synthetic workflow over the existing operation document.
+// It does not write normalized production evidence or manufacture verification.
+export const INTEGRATED_DEMO_SOURCE = 'INTEGRATED_DEMO';
+const SOURCE = INTEGRATED_DEMO_SOURCE;
+const EPS = 0.00001;
+const round = n => Math.round(n * 1e6) / 1e6;
+const timestamp = () => new Date().toISOString();
+const id = prefix => `${prefix}-${randomUUID()}`;
+const fail = (message, code = 'VALIDATION', status = 400) => { throw new DomainError(message, code, status); };
+const row = (s, key, identifier) => s[key].find(x => x.id === identifier) || fail(`${key}: data tidak ditemukan.`, 'NOT_FOUND', 404);
+const numeric = (n, label, positive = false) => {
+  if (n === null || n === '' || typeof n === 'boolean' || !Number.isFinite(Number(n)) || Number(n) < (positive ? 0.000001 : 0) || Number(n) > 1e9) fail(`${label} tidak valid.`);
+  return round(Number(n));
+};
+const text = (value, label) => { if (typeof value !== 'string' || !value.trim() || value.length > 160) fail(`${label} tidak valid.`); return value.trim(); };
+const admin = u => { if (u?.role !== 'admin') fail('Akses khusus Admin AIMOC.', 'FORBIDDEN', 403); };
+const scope = (u, role, locationId) => {
+  if (u?.role === 'admin') return;
+  if (u?.role !== role || !(u[role === 'stock' ? 'crusherIds' : 'jettyIds'] || []).includes(locationId)) fail('Akun tidak ditugaskan pada lokasi ini.', 'FORBIDDEN', 403);
+};
+const driver = (u, t) => { if (u?.role !== 'driver' || u.id !== t.assignedDriverUserId) fail('Hanya pengemudi yang ditugaskan dapat menjalankan tugas ini.', 'FORBIDDEN', 403); };
+const open = t => !['returned', 'cancelled'].includes(t.status);
+const active = t => open(t) && t.status !== 'queued';
+const integrated = t => t.source === SOURCE;
+const list = x => Array.isArray(x) ? x : [];
+const stable = value => Array.isArray(value) ? value.map(stable) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(k => [k, stable(value[k])])) : value;
+const fingerprint = value => createHash('sha256').update(JSON.stringify(stable(value))).digest('hex');
+const nextCode = (prefix, rows) => `${prefix}-${String(rows.length + 1).padStart(5, '0')}`;
+
+function event(s, actor, action, entityId, extra = {}) {
+  const result = {id: id('evt'), at: timestamp(), actorId: actor.id, actorName: actor.name || actor.username || actor.id, role: actor.role, type: action, entityId, source: SOURCE, synthetic: true, ...extra};
+  s.events.push(result);
+  return result;
+}
+
+function ledger(s, actor, type, stockpileId, volumeM3, t, tonnageT = 0) {
+  s.inventoryLedger.push({id: id('led'), at: timestamp(), actorId: actor.id, type, stockpileId, volumeM3: round(volumeM3), tonnageT: round(tonnageT), referenceId: t.id, source: SOURCE, synthetic: true});
+}
+
+function erp(s, type, t) {
+  s.erpOutbox.push({id: id('erp'), createdAt: timestamp(), type, entityId: t.id, status: 'awaiting_configuration', system: 'oracle_netsuite', source: SOURCE, synthetic: true, payload: {tripId: t.id, tripCode: t.code, requestId: t.requestId, dispatchId: t.dispatchId, skuId: t.skuId, volumeM3: t.volumeM3, tonnageT: t.tonnageT, sourceStockpileId: t.stockpileId, destinationStockpileId: t.destinationStockpileId || null, jettyId: t.jettyId, vesselId: t.vesselId, receiptCode: t.receiptCode || null, quantitySource: SOURCE}});
+}
+
+function aggregate(s) {
+  for (const d of s.dispatches.filter(integrated)) {
+    const trips = s.trips.filter(t => t.dispatchId === d.id);
+    const received = trips.filter(t => t.receivedAt);
+    d.completedTrips = trips.filter(t => t.status === 'returned').length;
+    d.receivedTrips = received.length;
+    d.pendingTrips = trips.length - d.completedTrips;
+    d.deliveredM3 = round(received.reduce((sum, t) => sum + t.volumeM3, 0));
+    d.deliveredT = round(received.reduce((sum, t) => sum + t.tonnageT, 0));
+    d.remainingT = round(Math.max(0, d.tonnageT - d.deliveredT));
+    d.deliveryStatus = received.length === trips.length ? 'received' : received.length ? 'partial' : 'pending';
+    d.status = trips.length && d.completedTrips === trips.length ? 'completed' : trips.some(t => t.status !== 'queued') ? 'in_progress' : 'planned';
+  }
+  for (const r of s.requests.filter(integrated)) {
+    const dispatches = s.dispatches.filter(d => d.requestId === r.id);
+    r.deliveredM3 = round(dispatches.reduce((sum, d) => sum + (d.deliveredM3 || 0), 0));
+    r.deliveredT = round(dispatches.reduce((sum, d) => sum + (d.deliveredT || 0), 0));
+    r.remainingT = round(Math.max(0, r.lines.reduce((sum, line) => sum + line.tonnageT, 0) - r.deliveredT));
+    r.pendingTrips = dispatches.reduce((sum, d) => sum + d.pendingTrips, 0);
+    if (dispatches.length) r.status = dispatches.every(d => d.status === 'completed') ? 'completed' : dispatches.some(d => d.status === 'in_progress') ? 'in_progress' : 'planned';
+    r.deliveryStatus = r.remainingT <= EPS && dispatches.length ? 'received' : r.deliveredT > EPS ? 'partial' : 'pending';
+  }
+}
+
+function destination(s, request, skuId, requestedStockpileId) {
+  const crusher = row(s, 'crushers', request.destinationId);
+  if (!crusher.active) fail('Lokasi tujuan LAND nonaktif.', 'INACTIVE_DESTINATION', 409);
+  const candidates = s.stockpiles.filter(x => x.active && x.crusherId === crusher.id && x.skuId === skuId);
+  const result = requestedStockpileId ? candidates.find(x => x.id === requestedStockpileId) : candidates.sort((a, b) => a.code.localeCompare(b.code))[0];
+  if (!result) fail('Stockpile tujuan LAND untuk SKU ini belum tersedia.', 'DESTINATION_STOCKPILE_REQUIRED', 409);
+  return result;
+}
+
+function createRequest(s, p, actor) {
+  if ((p.transferMode || 'MARINE') === 'MARINE') {
+    const result = applyAction(s, 'request.create', p, actor);
+    const request = row(s, 'requests', result.entityId);
+    request.source = SOURCE;
+    request.synthetic = true;
+    request.quantitySource = 'REQUESTED_DEMO';
+    // Preserve tonnes explicitly requested instead of re-deriving rounded m3.
+    request.lines.forEach((line, i) => { if (p.lines[i].unit === 't') line.tonnageT = numeric(p.lines[i].quantity, 'Tonase', true); });
+    const createdEvent = s.events.at(-1);
+    if (createdEvent) Object.assign(createdEvent, {source: SOURCE, synthetic: true});
+    return {...result, requestId: request.id, source: SOURCE};
+  }
+  admin(actor);
+  if (p.transferMode !== 'LAND') fail('Mode harus LAND atau MARINE.', 'TRANSFER_MODE_INVALID');
+  const request = {id: id('req'), code: nextCode('TR', s.requests), transferMode: 'LAND', destinationId: text(p.destinationId, 'Lokasi tujuan'), destination: text(p.destination, 'Nama tujuan'), jettyId: null, vesselId: null, lines: [], status: 'requested', requestedBy: actor.id, createdAt: timestamp(), deliveredM3: 0, deliveredT: 0, source: SOURCE, synthetic: true, quantitySource: 'REQUESTED_DEMO'};
+  if (!Array.isArray(p.lines) || !p.lines.length || p.lines.length > 6) fail('Permintaan harus berisi 1–6 SKU.');
+  const seen = new Set();
+  request.lines = p.lines.map(line => {
+    const product = row(s, 'products', line.skuId);
+    if (!product.active || seen.has(product.id)) fail('SKU nonaktif atau duplikat.');
+    seen.add(product.id);
+    if (!['t', 'm3'].includes(line.unit)) fail('Satuan harus t atau m3.');
+    const quantity = numeric(line.quantity, 'Jumlah transfer', true);
+    const densityTPerM3 = numeric(product.densityTPerM3, 'Berat jenis', true);
+    const target = destination(s, request, product.id, line.destinationStockpileId);
+    return {skuId: product.id, quantity, unit: line.unit, densityTPerM3, tonnageT: round(line.unit === 't' ? quantity : quantity * densityTPerM3), volumeM3: round(line.unit === 'm3' ? quantity : quantity / densityTPerM3), destinationStockpileId: target.id};
+  });
+  s.requests.push(request);
+  event(s, actor, 'request.created', request.id);
+  return {entityId: request.id, requestId: request.id, source: SOURCE};
+}
+
+function driverCatalog(drivers) {
+  return list(drivers).filter(u => u && u.id && u.role === 'driver' && u.active !== false && u.disabled !== true);
+}
+
+function planRequest(s, p, actor, options) {
+  admin(actor);
+  const request = row(s, 'requests', p.requestId);
+  if (!integrated(request)) fail('Permintaan ini bukan workflow demo terintegrasi.', 'SOURCE_MISMATCH', 409);
+  if (request.status !== 'requested') fail('Permintaan sudah direncanakan.', 'ALREADY_PLANNED', 409);
+  const drivers = driverCatalog(options.drivers);
+  const trucks = s.trucks.filter(t => t.active);
+  if (!trucks.length) fail('Tidak ada truk aktif.', 'NO_TRUCKS', 409);
+  if (!drivers.length) fail('Buat akun driver aktif sebelum merencanakan.', 'NO_DRIVERS', 409);
+  const existingBindings = new Map();
+  for (const t of s.trips.filter(open)) if (t.assignedDriverUserId) {
+    const prev = existingBindings.get(t.truckId);
+    if (prev && prev !== t.assignedDriverUserId) fail('Penugasan truk yang masih terbuka tidak konsisten.', 'ASSIGNMENT_CONFLICT', 409);
+    existingBindings.set(t.truckId, t.assignedDriverUserId);
+  }
+  let assignments;
+  if (p.assignments !== undefined) {
+    if (!Array.isArray(p.assignments) || !p.assignments.length) fail('Pilih setidaknya satu pasangan truk dan pengemudi.');
+    assignments = p.assignments.map(a => ({truck: trucks.find(t => t.id === a.truckId) || fail('Truk penugasan tidak aktif.', 'TRUCK_UNAVAILABLE', 409), driver: drivers.find(d => d.id === a.driverUserId) || fail('Pengemudi penugasan tidak aktif.', 'DRIVER_UNAVAILABLE', 409)}));
+  } else {
+    assignments = [];
+    const used = new Set();
+    for (const truck of trucks.filter(candidate => !s.trips.some(t => open(t) && t.truckId === candidate.id && !t.assignedDriverUserId))) {
+      const binding = existingBindings.get(truck.id);
+      const candidate = binding ? drivers.find(d => d.id === binding && !used.has(d.id)) : drivers.find(d => !used.has(d.id) && ![...existingBindings.entries()].some(([tid, did]) => tid !== truck.id && did === d.id));
+      if (candidate) { assignments.push({truck, driver: candidate}); used.add(candidate.id); }
+    }
+  }
+  if (!assignments.length) fail('Tidak ada pasangan truk/pengemudi yang tersedia.', 'NO_ASSIGNMENTS', 409);
+  if (new Set(assignments.map(a => a.truck.id)).size !== assignments.length || new Set(assignments.map(a => a.driver.id)).size !== assignments.length) fail('Satu pengemudi harus terikat pada satu truk; antrean serial tetap diperbolehkan.', 'ASSIGNMENT_CONFLICT', 409);
+  for (const a of assignments) {
+    if ((existingBindings.has(a.truck.id) && existingBindings.get(a.truck.id) !== a.driver.id) || [...existingBindings.entries()].some(([tid, did]) => tid !== a.truck.id && did === a.driver.id)) fail('Selesaikan antrean sebelum mengganti pengemudi/truk.', 'ASSIGNMENT_CONFLICT', 409);
+    if (s.trips.some(t => open(t) && t.truckId === a.truck.id && !t.assignedDriverUserId)) fail('Truk memiliki pekerjaan legacy yang belum selesai.', 'TRUCK_BUSY', 409);
+  }
+  const marine = request.transferMode === 'MARINE';
+  const vessel = marine ? row(s, 'vessels', request.vesselId) : null;
+  const requestedT = round(request.lines.reduce((sum, line) => sum + line.tonnageT, 0));
+  if (vessel && (vessel.active === false || vessel.status === 'closed' || vessel.jettyId !== request.jettyId || row(s, 'jetties', request.jettyId).active === false)) fail('Tujuan kapal/jetty tidak tersedia.', 'INACTIVE_DESTINATION', 409);
+  if (vessel && requestedT > vessel.payloadLimitT - vessel.loadedT - vessel.reservedT + EPS) fail('Sisa kapasitas kapal termasuk reservasi tidak cukup.', 'VESSEL_CAPACITY', 409);
+  const dispatch = {id: id('dsp'), code: nextCode('DSP', s.dispatches), requestId: request.id, transferMode: request.transferMode, source: SOURCE, synthetic: true, destinationId: request.destinationId || null, jettyId: request.jettyId, vesselId: request.vesselId, allocations: [], tripIds: [], status: 'planned', createdAt: timestamp(), completedTrips: 0, deliveredM3: 0, deliveredT: 0};
+  let sequence = s.trips.reduce((max, t) => Math.max(max, t.sequence || 0), 0);
+  const load = new Map(assignments.map(a => [a.truck.id, s.trips.filter(t => t.truckId === a.truck.id && open(t)).length]));
+  for (const line of request.lines) {
+    const product = row(s, 'products', line.skuId);
+    if (!product.active) fail('SKU nonaktif.', 'INACTIVE_SOURCE', 409);
+    const target = marine ? null : destination(s, request, line.skuId, line.destinationStockpileId);
+    const stocks = s.stockpiles.filter(stock => stock.active && stock.skuId === line.skuId && row(s, 'crushers', stock.crusherId).active && (marine || stock.crusherId !== request.destinationId)).sort((a, b) => (b.onHandM3 - b.reservedM3) - (a.onHandM3 - a.reservedM3) || a.code.localeCompare(b.code));
+    let remainingT = line.tonnageT;
+    for (const stock of stocks) {
+      const availableM3 = round(stock.onHandM3 - stock.reservedM3);
+      let sourceT = round(Math.min(remainingT, availableM3 * line.densityTPerM3));
+      const sourceBudgetM3 = round(Math.min(availableM3, sourceT / line.densityTPerM3));
+      const allocation = {stockpileId: stock.id, crusherId: stock.crusherId, skuId: line.skuId, volumeM3: 0, tonnageT: 0};
+      while (sourceT > 0) {
+        if (dispatch.tripIds.length >= 2000 || s.trips.length >= 20000) fail('Rencana melampaui batas 2.000 ritase.', 'TRIP_LIMIT', 409);
+        const assignment = [...assignments].sort((a, b) => load.get(a.truck.id) - load.get(b.truck.id) || a.truck.code.localeCompare(b.truck.code))[0];
+        const truck = assignment.truck;
+        const tonnageT = round(Math.min(sourceT, truck.payloadLimitT, truck.bedM3 * line.densityTPerM3));
+        if (tonnageT <= 0) fail('Kapasitas truk tidak valid.');
+        // Tonnes are split first so e.g. 80t with a 40t payload is two trips.
+        // The final m3 slice uses the remaining source budget: independently
+        // rounding every trip must never reserve a micro-m3 above physical stock.
+        const volumeM3 = round(Math.min(tonnageT / line.densityTPerM3, sourceBudgetM3 - allocation.volumeM3));
+        if (volumeM3 <= 0) fail('Kuantitas terlalu kecil untuk presisi volume demo.', 'QUANTITY_PRECISION', 409);
+        if (round(stock.reservedM3 + volumeM3) > stock.onHandM3) fail('Pembulatan reservasi melebihi stok tersedia.', 'INSUFFICIENT_STOCK', 409);
+        const readyMinutes = load.get(truck.id) * truck.cycleMinutes;
+        const trip = {id: id('trip'), code: nextCode('RIT', s.trips), source: SOURCE, synthetic: true, quantitySource: 'PLANNED_DEMO', requestId: request.id, dispatchId: dispatch.id, transferMode: request.transferMode, stockpileId: stock.id, crusherId: stock.crusherId, skuId: line.skuId, destinationId: request.destinationId || null, destinationStockpileId: target?.id || null, destinationCrusherId: target?.crusherId || null, truckId: truck.id, assignedDriverUserId: assignment.driver.id, jettyId: request.jettyId, vesselId: request.vesselId, densityTPerM3: line.densityTPerM3, volumeM3, tonnageT, status: 'queued', sequence: ++sequence, createdAt: timestamp(), estimatedStartAt: new Date(Date.now() + readyMinutes * 60000).toISOString(), estimatedReturnAt: new Date(Date.now() + (readyMinutes + truck.cycleMinutes) * 60000).toISOString(), weighingEvents: []};
+        s.trips.push(trip);
+        dispatch.tripIds.push(trip.id);
+        stock.reservedM3 = round(stock.reservedM3 + volumeM3);
+        allocation.volumeM3 = round(allocation.volumeM3 + volumeM3);
+        allocation.tonnageT = round(allocation.tonnageT + tonnageT);
+        sourceT = round(sourceT - tonnageT);
+        remainingT = round(remainingT - tonnageT);
+        load.set(truck.id, load.get(truck.id) + 1);
+      }
+      if (allocation.tonnageT > 0) dispatch.allocations.push(allocation);
+      if (remainingT === 0) break;
+    }
+    if (remainingT > 0) fail(`Stok tersedia ${product.name} tidak mencukupi.`, 'INSUFFICIENT_STOCK', 409);
+  }
+  dispatch.stockpileIds = [...new Set(dispatch.allocations.map(a => a.stockpileId))];
+  dispatch.crusherIds = [...new Set(dispatch.allocations.map(a => a.crusherId))];
+  dispatch.skuIds = [...new Set(dispatch.allocations.map(a => a.skuId))];
+  for (const [key, values] of [['stockpileId', dispatch.stockpileIds], ['crusherId', dispatch.crusherIds], ['skuId', dispatch.skuIds]]) dispatch[key] = values.length === 1 ? values[0] : null;
+  dispatch.tonnageT = round(dispatch.allocations.reduce((sum, a) => sum + a.tonnageT, 0));
+  dispatch.volumeM3 = round(dispatch.allocations.reduce((sum, a) => sum + a.volumeM3, 0));
+  s.dispatches.push(dispatch);
+  if (vessel) vessel.reservedT = round(vessel.reservedT + dispatch.tonnageT);
+  Object.assign(request, {dispatchId: dispatch.id, status: 'planned', plannedAt: timestamp(), plannedBy: actor.id, planningStatus: 'INTEGRATED_DEMO'});
+  event(s, actor, 'request.planned', request.id);
+  aggregate(s);
+  return {entityId: request.id, requestId: request.id, dispatchIds: [dispatch.id], tripIds: dispatch.tripIds, source: SOURCE};
+}
+
+function checkTarget(s, t) {
+  if (t.transferMode === 'LAND') {
+    const target = row(s, 'stockpiles', t.destinationStockpileId);
+    if (!target.active || !row(s, 'crushers', target.crusherId).active || target.skuId !== t.skuId || target.crusherId !== t.destinationCrusherId) fail('Tujuan stockpile tidak sesuai atau nonaktif.', 'DESTINATION_MISMATCH', 409);
+  } else {
+    const vessel = row(s, 'vessels', t.vesselId);
+    if (vessel.active === false || vessel.status === 'closed' || vessel.jettyId !== t.jettyId || row(s, 'jetties', t.jettyId).active === false) fail('Kapal/jetty tujuan tidak tersedia.', 'INACTIVE_DESTINATION', 409);
+  }
+}
+
+function reconcile(t) {
+  if (t.status !== 'start_pending' || !t.qrScannedAt) return;
+  const pending = list(t.weighingEvents).find(e => e.type === 'TARE' && e.status === 'PENDING');
+  if (pending) {
+    pending.status = 'ACCEPTED'; pending.acceptedAt = timestamp();
+    t.tareT = pending.weightT; t.tareEventId = pending.id; t.tareAt = pending.acceptedAt;
+  }
+  if (t.tareT !== undefined) { t.status = 'ready_to_load'; t.readyToLoadAt = timestamp(); }
+}
+
+function moveTrip(s, action, p, actor, options) {
+  const t = row(s, 'trips', p.tripId);
+  if (!integrated(t)) fail('Ritase ini bukan demo terintegrasi.', 'SOURCE_MISMATCH', 409);
+  for (const key of ['truckId', 'skuId', 'stockpileId', 'jettyId', 'vesselId', 'destinationStockpileId']) if (p[key] !== undefined && p[key] !== t[key]) fail('Truk, SKU, atau tujuan tidak sesuai dispatch.', 'DESTINATION_MISMATCH', 409);
+  const stock = row(s, 'stockpiles', t.stockpileId);
+  const sourceScope = () => scope(actor, 'stock', stock.crusherId);
+  const destinationScope = () => scope(actor, t.transferMode === 'LAND' ? 'stock' : 'jetty', t.transferMode === 'LAND' ? t.destinationCrusherId : t.jettyId);
+  const isState = (...statuses) => { if (!statuses.includes(t.status)) fail(`Status ${t.status}; tindakan membutuhkan ${statuses.join('/')}.`, 'INVALID_TRANSITION', 409); };
+  if (action === 'qr') admin(actor);
+  else if (['start', 'return_start'].includes(action)) driver(actor, t);
+  else if (['arrive', 'receive'].includes(action)) destinationScope();
+  else sourceScope();
+  const eventId = p.externalEventId ?? p.eventId;
+  const normalized = {...p}; delete normalized.externalEventId; delete normalized.eventId;
+  const digest = fingerprint({action, payload: normalized});
+  if (eventId !== undefined) {
+    text(eventId, 'ID event');
+    const prior = s.events.find(e => e.source === SOURCE && e.externalEventId === eventId);
+    if (prior) {
+      if (prior.eventFingerprint !== digest || prior.entityId !== t.id || prior.actorId !== actor.id) fail('ID event digunakan dengan isi berbeda.', 'EVENT_CONFLICT', 409);
+      return {entityId: t.id, tripId: t.id, source: SOURCE, replayed: true, status: t.status};
+    }
+  }
+  if (action === 'qr') {
+    isState('queued', 'start_pending', 'ready_to_load');
+    if (t.qrScannedAt) fail('QR ritase sudah dipindai.', 'ALREADY_RECORDED', 409);
+    t.qrScannedAt = timestamp(); t.qrScannedBy = actor.id; t.qrSource = SOURCE;
+  } else if (action === 'tare') {
+    isState('queued', 'start_pending');
+    if (t.weighingEvents.some(e => e.type === 'TARE')) fail('Tare sudah direkam.', 'ALREADY_RECORDED', 409);
+    t.weighingEvents.push({id: id('weigh'), type: 'TARE', weightT: numeric(p.weightT, 'Tare', true), status: 'PENDING', at: timestamp(), actorId: actor.id, source: SOURCE, synthetic: true});
+  } else if (action === 'start') {
+    isState('queued');
+    const truck = row(s, 'trucks', t.truckId);
+    if (!truck.active || !driverCatalog(options.drivers).some(d => d.id === t.assignedDriverUserId)) fail('Truk atau driver tidak aktif.', 'ASSIGNMENT_UNAVAILABLE', 409);
+    if (s.trips.some(other => other.id !== t.id && active(other) && (other.truckId === t.truckId || other.assignedDriverUserId === t.assignedDriverUserId))) fail('Truk atau pengemudi masih menjalankan tugas lain.', 'TRUCK_OR_DRIVER_BUSY', 409);
+    if (s.trips.some(other => other.id !== t.id && open(other) && other.sequence < t.sequence && (other.truckId === t.truckId || other.assignedDriverUserId === t.assignedDriverUserId))) fail('Selesaikan tugas sebelumnya secara serial.', 'QUEUE_ORDER', 409);
+    if (!stock.active || !row(s, 'crushers', stock.crusherId).active || !row(s, 'products', t.skuId).active) fail('Sumber stockpile/SKU nonaktif.', 'INACTIVE_SOURCE', 409);
+    checkTarget(s, t);
+    t.status = 'start_pending'; t.startedAt = timestamp();
+    t.estimatedReturnAt = new Date(Date.now() + truck.cycleMinutes * 60000).toISOString();
+  } else if (action === 'loading') {
+    isState('ready_to_load');
+    if (!stock.active || !row(s, 'crushers', stock.crusherId).active || !row(s, 'products', t.skuId).active) fail('Sumber stockpile/SKU nonaktif.', 'INACTIVE_SOURCE', 409);
+    checkTarget(s, t);
+    t.status = 'loading'; t.loadingAt = timestamp();
+  } else if (action === 'gross') {
+    isState('loading');
+    if (t.tareT === undefined || !t.tareEventId) fail('Tare wajib tersedia.', 'TARE_REQUIRED', 409);
+    const grossT = numeric(p.weightT, 'Gross', true), netT = round(grossT - t.tareT);
+    if (netT <= 0 || Math.abs(netT - t.tonnageT) > EPS) fail('Netto harus sesuai rencana demo. Selisih/underload memerlukan rencana baru; tidak ditandai selesai.', 'WEIGHT_RECONCILIATION', 409);
+    const truck = row(s, 'trucks', t.truckId);
+    if (netT > truck.payloadLimitT + EPS || t.volumeM3 > truck.bedM3 + EPS) fail('Muatan melebihi kapasitas truk.', 'TRUCK_CAPACITY', 409);
+    const measurement = {id: id('weigh'), type: 'GROSS', weightT: grossT, netT, status: 'ACCEPTED', at: timestamp(), actorId: actor.id, source: SOURCE, synthetic: true};
+    t.weighingEvents.push(measurement);
+    Object.assign(t, {grossT, netT, grossEventId: measurement.id, grossAt: measurement.at, quantitySource: SOURCE, status: 'weighed'});
+  } else if (action === 'depart') {
+    isState('weighed');
+    if (!t.qrScannedAt || !t.tareEventId || !t.grossEventId || Math.abs(round(t.grossT - t.tareT) - t.tonnageT) > EPS) fail('QR, tare, dan gross yang valid wajib tersedia.', 'WEIGHING_REQUIRED', 409);
+    checkTarget(s, t);
+    if (!stock.active || !row(s, 'crushers', stock.crusherId).active || !row(s, 'products', t.skuId).active) fail('Sumber tidak aktif.', 'INACTIVE_SOURCE', 409);
+    if (stock.onHandM3 + EPS < t.volumeM3 || stock.reservedM3 + EPS < t.volumeM3) fail('Stok/reservasi tidak cukup.', 'STOCK_CONFLICT', 409);
+    stock.onHandM3 = round(stock.onHandM3 - t.volumeM3); stock.reservedM3 = round(Math.max(0, stock.reservedM3 - t.volumeM3));
+    t.status = 'in_transit'; t.departedAt = timestamp();
+    ledger(s, actor, 'transfer_departed', stock.id, -t.volumeM3, t, -t.tonnageT); erp(s, 'stock_transfer_departed', t);
+  } else if (action === 'arrive') {
+    isState('in_transit'); checkTarget(s, t);
+    t.status = 'arrived'; t.arrivedAt = timestamp();
+  } else if (action === 'receive') {
+    isState('arrived'); checkTarget(s, t);
+    if (t.transferMode === 'LAND') {
+      const target = row(s, 'stockpiles', t.destinationStockpileId);
+      target.onHandM3 = round(target.onHandM3 + t.volumeM3);
+      ledger(s, actor, 'stock_transfer_received', target.id, t.volumeM3, t, t.tonnageT);
+    } else {
+      const vessel = row(s, 'vessels', t.vesselId);
+      if (vessel.status !== 'loading') fail('Kapal belum berstatus loading.', 'VESSEL_NOT_LOADING', 409);
+      if (vessel.loadedT + t.tonnageT > vessel.payloadLimitT + EPS || vessel.reservedT + EPS < t.tonnageT) fail('Kapasitas/reservasi kapal tidak cukup.', 'VESSEL_CAPACITY', 409);
+      vessel.loadedT = round(vessel.loadedT + t.tonnageT); vessel.reservedT = round(Math.max(0, vessel.reservedT - t.tonnageT));
+      ledger(s, actor, 'vessel_received', stock.id, 0, t, t.tonnageT);
+    }
+    const receiptMax = s.trips.reduce((max, trip) => Math.max(max, Number(/^RCV-(\d+)$/.exec(trip.receiptCode || '')?.[1] || 0)), 0);
+    Object.assign(t, {status: 'unloaded', receivedAt: timestamp(), unloadedAt: timestamp(), receivedBy: actor.id, receiptCode: `RCV-${String(receiptMax + 1).padStart(5, '0')}`});
+    erp(s, 'stock_transfer_received', t);
+  } else if (action === 'return_start') {
+    isState('unloaded'); t.status = 'returning'; t.returnStartedAt = timestamp();
+  } else if (action === 'return') {
+    isState('returning');
+    t.status = 'returned'; t.returnedAt = timestamp(); t.returnVerifiedBy = actor.id;
+  } else fail('Tindakan ritase tidak didukung.', 'ACTION_NOT_FOUND', 404);
+  reconcile(t);
+  const audit = event(s, actor, `trip.${action}`, t.id, eventId === undefined ? {} : {externalEventId: eventId, eventFingerprint: digest});
+  if (action === 'qr') t.qrEventId = audit.id;
+  aggregate(s);
+  return {entityId: t.id, tripId: t.id, source: SOURCE, status: t.status};
+}
+
+/** Apply to a draft and replace only after validation, including direct callers. */
+export function applyIntegratedAction(state, action, payload, actor, options = {}) {
+  if (!actor?.id || !['admin', 'stock', 'jetty', 'driver'].includes(actor.role)) fail('Akun tidak berwenang.', 'FORBIDDEN', 403);
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) fail('Payload wajib berupa object.');
+  const draft = structuredClone(state);
+  for (const key of ['products', 'crushers', 'stockpiles', 'trucks', 'jetties', 'vessels', 'requests', 'dispatches', 'trips', 'inventoryLedger', 'events', 'erpOutbox']) if (!Array.isArray(draft[key])) fail('Dokumen operasional tidak lengkap.', 'STATE_INVALID', 409);
+  let result;
+  if (action === 'request.create') result = createRequest(draft, payload, actor);
+  else if (action === 'request.plan') result = planRequest(draft, payload, actor, options);
+  else if (typeof action === 'string' && action.startsWith('trip.')) result = moveTrip(draft, action.slice(5), payload, actor, options);
+  else fail('Tindakan demo tidak didukung.', 'ACTION_NOT_FOUND', 404);
+  draft.updatedAt = timestamp();
+  Object.assign(state, draft);
+  return result;
+}
+
+/** Role-scoped data; occupancy is computed BEFORE scope filtering. */
+export function integratedView(state, actor, options = {}) {
+  if (!actor?.id || !['admin', 'stock', 'jetty', 'driver'].includes(actor.role)) fail('Akun tidak berwenang.', 'FORBIDDEN', 403);
+  const view = structuredClone(state);
+  const allTrips = state.trips;
+  const fleet = state.trucks.map(truck => {
+    const trips = allTrips.filter(t => t.truckId === truck.id && open(t));
+    const current = trips.find(active);
+    const queued = trips.filter(t => t.status === 'queued').sort((a, b) => a.sequence - b.sequence);
+    const ownsCurrent = actor.role === 'admin' || current?.assignedDriverUserId === actor.id || actor.role === 'stock' && (actor.crusherIds || []).includes(current?.crusherId) || actor.role === 'jetty' && (actor.jettyIds || []).includes(current?.jettyId);
+    return {...truck, status: !truck.active ? 'unavailable' : current ? 'busy' : queued.length ? 'allocated' : 'available', activeTripId: ownsCurrent ? current?.id || null : null, queuedTrips: queued.length, nextTripId: actor.role === 'admin' || queued[0]?.assignedDriverUserId === actor.id ? queued[0]?.id || null : null, estimatedAvailableAt: current?.estimatedReturnAt || timestamp()};
+  });
+  const visible = t => integrated(t) && (actor.role === 'admin' || actor.role === 'driver' && t.assignedDriverUserId === actor.id || actor.role === 'stock' && ((actor.crusherIds || []).includes(t.crusherId) || (actor.crusherIds || []).includes(t.destinationCrusherId)) || actor.role === 'jetty' && (actor.jettyIds || []).includes(t.jettyId));
+  view.trips = allTrips.filter(visible).map(t => {
+    const result = structuredClone(t), allowed = [];
+    const sourceStock = state.stockpiles.find(stock => stock.id === t.stockpileId);
+    const targetStock = state.stockpiles.find(stock => stock.id === t.destinationStockpileId);
+    result.sourceStockpileCode = sourceStock?.code || null;
+    result.sourceCrusherCode = state.crushers.find(c => c.id === t.crusherId)?.code || null;
+    result.destinationStockpileCode = targetStock?.code || null;
+    result.destinationCrusherCode = state.crushers.find(c => c.id === t.destinationCrusherId)?.code || null;
+    const assignedDriver = driverCatalog(options.drivers).find(d => d.id === t.assignedDriverUserId);
+    result.driverName = assignedDriver?.name || assignedDriver?.displayName || assignedDriver?.username || t.assignedDriverUserId;
+    result.qrStatus = t.qrScannedAt ? 'SCANNED' : 'NOT_SCANNED';
+    const sourceAllowed = actor.role === 'admin' || actor.role === 'stock' && (actor.crusherIds || []).includes(t.crusherId);
+    const destinationAllowed = actor.role === 'admin' || actor.role === (t.transferMode === 'LAND' ? 'stock' : 'jetty') && (actor[t.transferMode === 'LAND' ? 'crusherIds' : 'jettyIds'] || []).includes(t.transferMode === 'LAND' ? t.destinationCrusherId : t.jettyId);
+    const assigned = actor.role === 'driver' && actor.id === t.assignedDriverUserId;
+    const blocked = allTrips.find(other => other.id !== t.id && open(other) && (other.truckId === t.truckId || other.assignedDriverUserId === t.assignedDriverUserId) && (active(other) || other.sequence < t.sequence));
+    const driverActive = driverCatalog(options.drivers).some(d => d.id === t.assignedDriverUserId);
+    result.canStart = assigned && t.status === 'queued' && !blocked && driverActive && state.trucks.find(truck => truck.id === t.truckId)?.active === true;
+    result.blockReason = t.status === 'queued' && blocked ? 'PREVIOUS_TRIP_NOT_RETURNED' : t.status === 'queued' && !driverActive ? 'DRIVER_INACTIVE' : t.status === 'start_pending' ? !t.qrScannedAt ? 'QR_REQUIRED' : 'TARE_REQUIRED' : null;
+    if (actor.role === 'admin' && ['queued', 'start_pending', 'ready_to_load'].includes(t.status) && !t.qrScannedAt) allowed.push('trip.qr');
+    if (sourceAllowed && ['queued', 'start_pending'].includes(t.status) && !list(t.weighingEvents).some(e => e.type === 'TARE')) allowed.push('trip.tare');
+    if (result.canStart) allowed.push('trip.start');
+    if (sourceAllowed && t.status === 'ready_to_load') allowed.push('trip.loading');
+    if (sourceAllowed && t.status === 'loading') allowed.push('trip.gross');
+    if (sourceAllowed && t.status === 'weighed') allowed.push('trip.depart');
+    if (destinationAllowed && t.status === 'in_transit') allowed.push('trip.arrive');
+    if (destinationAllowed && t.status === 'arrived' && (t.transferMode === 'LAND' || state.vessels.find(v => v.id === t.vesselId)?.status === 'loading')) allowed.push('trip.receive');
+    if (assigned && t.status === 'unloaded') allowed.push('trip.return_start');
+    if (sourceAllowed && t.status === 'returning') allowed.push('trip.return');
+    result.allowedActions = allowed;
+    return result;
+  });
+  const tripIds = new Set(view.trips.map(t => t.id));
+  const dispatchIds = new Set(view.trips.map(t => t.dispatchId));
+  const requestIds = new Set(view.trips.map(t => t.requestId));
+  const requestVisible = r => integrated(r) && (actor.role === 'admin' || requestIds.has(r.id) || actor.role === 'jetty' && (actor.jettyIds || []).includes(r.jettyId));
+  view.requests = view.requests.filter(requestVisible);
+  view.dispatches = view.dispatches.filter(d => integrated(d) && (actor.role === 'admin' || dispatchIds.has(d.id)));
+  if (actor.role !== 'admin') {
+    view.dispatches = view.dispatches.map(d => {
+      const assignedTrips = view.trips.filter(t => t.dispatchId === d.id);
+      const stockIds = new Set(assignedTrips.map(t => t.stockpileId));
+      const allocations = list(d.allocations).filter(a => stockIds.has(a.stockpileId)).map(a => {
+        const subset = assignedTrips.filter(t => t.stockpileId === a.stockpileId && t.skuId === a.skuId);
+        return {...a, volumeM3: round(subset.reduce((sum, t) => sum + t.volumeM3, 0)), tonnageT: round(subset.reduce((sum, t) => sum + t.tonnageT, 0))};
+      });
+      const received = assignedTrips.filter(t => t.receivedAt);
+      return {...d, tripIds: assignedTrips.map(t => t.id), allocations, stockpileIds: [...stockIds], crusherIds: [...new Set(assignedTrips.map(t => t.crusherId))], skuIds: [...new Set(assignedTrips.map(t => t.skuId))], stockpileId: stockIds.size === 1 ? [...stockIds][0] : null, crusherId: new Set(assignedTrips.map(t => t.crusherId)).size === 1 ? assignedTrips[0].crusherId : null, skuId: new Set(assignedTrips.map(t => t.skuId)).size === 1 ? assignedTrips[0].skuId : null, volumeM3: round(assignedTrips.reduce((sum, t) => sum + t.volumeM3, 0)), tonnageT: round(assignedTrips.reduce((sum, t) => sum + t.tonnageT, 0)), deliveredM3: round(received.reduce((sum, t) => sum + t.volumeM3, 0)), deliveredT: round(received.reduce((sum, t) => sum + t.tonnageT, 0)), remainingT: round(assignedTrips.filter(t => !t.receivedAt).reduce((sum, t) => sum + t.tonnageT, 0)), deliveryStatus: received.length === assignedTrips.length ? 'received' : received.length ? 'partial' : 'pending', status: assignedTrips.every(t => t.status === 'returned') ? 'completed' : assignedTrips.some(t => t.status !== 'queued') ? 'in_progress' : 'planned', completedTrips: assignedTrips.filter(t => t.status === 'returned').length, receivedTrips: received.length, pendingTrips: assignedTrips.filter(open).length, scoped: true};
+    });
+    view.requests = view.requests.map(request => {
+      const assignedTrips = view.trips.filter(t => t.requestId === request.id);
+      if (!assignedTrips.length) return {...request, lines: [], scoped: true};
+      const skus = new Set(assignedTrips.map(t => t.skuId));
+      const received = assignedTrips.filter(t => t.receivedAt);
+      const lines = request.lines.filter(line => skus.has(line.skuId)).map(line => {
+        const subset = assignedTrips.filter(t => t.skuId === line.skuId);
+        const tonnageT = round(subset.reduce((sum, t) => sum + t.tonnageT, 0)), volumeM3 = round(subset.reduce((sum, t) => sum + t.volumeM3, 0));
+        return {...line, tonnageT, volumeM3, quantity: line.unit === 't' ? tonnageT : volumeM3};
+      });
+      const deliveredT = round(received.reduce((sum, t) => sum + t.tonnageT, 0));
+      return {...request, lines, deliveredT, deliveredM3: round(received.reduce((sum, t) => sum + t.volumeM3, 0)), remainingT: round(lines.reduce((sum, line) => sum + line.tonnageT, 0) - deliveredT), deliveryStatus: received.length === assignedTrips.length ? 'received' : received.length ? 'partial' : 'pending', status: assignedTrips.every(t => t.status === 'returned') ? 'completed' : assignedTrips.some(t => t.status !== 'queued') ? 'in_progress' : 'planned', pendingTrips: assignedTrips.filter(open).length, scoped: true};
+    });
+    view.events = view.events.filter(e => tripIds.has(e.entityId));
+    view.erpOutbox = [];
+    view.inventoryLedger = view.inventoryLedger.filter(e => tripIds.has(e.referenceId));
+    view.measurements = actor.role === 'stock' ? view.measurements.filter(m => (actor.crusherIds || []).includes(m.crusherId)) : [];
+    if (actor.role === 'stock') {
+      view.stockpiles = view.stockpiles.filter(x => (actor.crusherIds || []).includes(x.crusherId));
+      view.crushers = view.crushers.filter(x => (actor.crusherIds || []).includes(x.id));
+    } else if (actor.role === 'driver') {
+      const stockIds = new Set(view.trips.flatMap(t => [t.stockpileId, t.destinationStockpileId]));
+      view.stockpiles = view.stockpiles.filter(x => stockIds.has(x.id)).map(({onHandM3, reservedM3, ...s}) => s);
+      const ids = new Set(view.stockpiles.map(s => s.crusherId));
+      view.crushers = view.crushers.filter(x => ids.has(x.id));
+    } else { view.stockpiles = []; view.crushers = []; }
+    const visibleJettyIds = new Set(view.trips.map(t => t.jettyId));
+    const visibleVesselIds = new Set(view.trips.map(t => t.vesselId));
+    if (actor.role === 'jetty') for (const identifier of actor.jettyIds || []) visibleJettyIds.add(identifier);
+    view.jetties = view.jetties.filter(j => visibleJettyIds.has(j.id));
+    view.vessels = view.vessels.filter(v => actor.role === 'jetty' ? visibleJettyIds.has(v.jettyId) : visibleVesselIds.has(v.id));
+  }
+  view.trucks = fleet;
+  view.fleet = fleet;
+  view.drivers = driverCatalog(options.drivers).filter(d => actor.role === 'admin' || d.id === actor.id).map(d => ({id: d.id, name: d.name || d.displayName || d.username || d.id, username: d.username, role: 'driver', active: true}));
+  view.integratedDemo = {source: SOURCE, synthetic: true, productionEvidence: false, netsuitePosting: 'awaiting_configuration', activeTrips: fleet.filter(t => t.status === 'busy').length};
+  const sum = (rows, field) => round(rows.reduce((total, item) => total + (item[field] || 0), 0));
+  view.metrics = {onHandM3: sum(view.stockpiles, 'onHandM3'), reservedM3: sum(view.stockpiles, 'reservedM3'), availableM3: round(sum(view.stockpiles, 'onHandM3') - sum(view.stockpiles, 'reservedM3')), inTransitM3: sum(view.trips.filter(t => ['in_transit', 'arrived'].includes(t.status)), 'volumeM3'), deliveredM3: sum(view.trips.filter(t => t.receivedAt), 'volumeM3'), deliveredT: sum(view.trips.filter(t => t.receivedAt), 'tonnageT'), availableTrucks: fleet.filter(t => t.status === 'available').length, busyTrucks: fleet.filter(t => t.status === 'busy').length, allocatedTrucks: fleet.filter(t => t.status === 'allocated').length, activeTrips: view.trips.filter(active).length, queuedTrips: view.trips.filter(t => t.status === 'queued').length, completedTrips: view.trips.filter(t => t.status === 'returned').length, openRequests: view.requests.filter(r => r.status !== 'completed').length, erpPending: view.erpOutbox.length};
+  for (const stock of view.stockpiles) if (stock.onHandM3 !== undefined) stock.availableM3 = round(stock.onHandM3 - stock.reservedM3);
+  for (const vessel of view.vessels) vessel.remainingT = round(vessel.payloadLimitT - vessel.loadedT - vessel.reservedT);
+  view.access = {role: actor.role, crusherIds: actor.crusherIds || [], jettyIds: actor.jettyIds || []};
+  view.erpStatus = 'awaiting_configuration';
+  return view;
+}

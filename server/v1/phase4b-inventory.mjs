@@ -1,4 +1,6 @@
 import {randomUUID,createHash} from 'node:crypto';
+import {reconcilePendingWeighbridgeEventsInTransaction} from './phase4b-weighbridge.mjs';
+import {refreshDispatchProgress} from './dispatch-progress.mjs';
 const fail=(code,message,status=409)=>{throw Object.assign(new Error(message),{code,status});};
 const row=async(c,sql,args=[]) => (await c.query(sql,args)).rows[0];
 const sum=xs=>xs.reduce((a,x)=>a+Number(x),0);
@@ -101,7 +103,9 @@ export async function confirmTripLoading(db,{actorId,idempotencyKey,tripId}){
     await permission(c,actorId,d.source_stockpile_id,'stockpile.loading.confirm');
     await c.query(`UPDATE aimoc_execution_v1.trips SET status='LOADING' WHERE id=$1`,[trip.id]);
     await outbox(c,trip.id,'TRIP_LOADING_CONFIRMED',{trip_id:trip.id,actor_id:actorId});
-    return {trip_id:trip.id,status:'LOADING'};
+    await reconcilePendingWeighbridgeEventsInTransaction(c,{tripId:trip.id});
+    const current=await row(c,'SELECT status FROM aimoc_execution_v1.trips WHERE id=$1',[trip.id]);
+    return {trip_id:trip.id,status:current.status};
   }));
 }
 /** Physical departure debits source and transfers actual verified tonnage into custody. */
@@ -223,7 +227,8 @@ export async function verifyDestinationReceipt(db,{actorId,idempotencyKey,tripId
     await outbox(c,trip.id,complete?'TRIP_RECEIPT_FINAL':'TRIP_RECEIPT_PARTIAL',
       {trip_id:trip.id,receipt_id:receiptId,received_t:receivedT,remaining_t:fixed(Number(cargo.shipped_t)-total),
        final:complete,destination_location_id:cargo.destination_location_id,receiving_actor_id:actorId});
+    const dispatchStatus=await refreshDispatchProgress(c,d.id);
     return {trip_id:trip.id,receipt_id:receiptId,received_t:receivedT,final:complete,
-      remaining_t:fixed(Number(cargo.shipped_t)-total),sequence_released:false};
+      remaining_t:fixed(Number(cargo.shipped_t)-total),sequence_released:false,dispatch_status:dispatchStatus};
   }));
 }

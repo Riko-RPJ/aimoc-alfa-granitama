@@ -46,7 +46,7 @@ test('authenticated multioperator API preserves shared operational state',async 
    assert.equal((await action('trip.depart',{tripId:trip.id},admin,randomUUID(),{expectedRevision:revision})).body.error,'REVISION_CONFLICT');
   });
   await t.test('concurrent calls load one trip exactly once; arrival does not count as loaded',async()=>{
-   const [a,b]=await Promise.all([action('trip.depart',{tripId:trip.id},admin),action('trip.depart',{tripId:trip.id},admin)]);assert.deepEqual([a.status,b.status].sort(),[200,409]);
+   const [a,b]=await Promise.all([action('trip.depart',{tripId:trip.id,tareT:20,grossT:20+trip.tonnageT},admin),action('trip.depart',{tripId:trip.id,tareT:20,grossT:20+trip.tonnageT},admin)]);assert.deepEqual([a.status,b.status].sort(),[200,409]);
    const before=await call('/api/state','GET',undefined,jetty);assert.equal(before.body.state.metrics.inTransitM3,trip.volumeM3);assert.equal(before.body.state.vessels[0].loadedT,0);
    assert.equal((await action('trip.arrive',{tripId:trip.id,vesselId:'vessel-2'},jetty)).status,409);
    assert.equal((await action('trip.arrive',{tripId:trip.id},jetty)).status,200);

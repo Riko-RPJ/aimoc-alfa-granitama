@@ -57,9 +57,11 @@ test('Phase 4B security: ordering, payload limit, custody overbooking and immuta
     assert.equal(qr.status,'ACCEPTED');
     const tare=await ingestSignedWeighbridgeEvent(db,signed(body('TARE_RECORDED','tare-ok','12.000000',1000)));
     assert.equal(tare.status,'ACCEPTED');
-    await confirmTripLoading(db,{actorId:'loader',idempotencyKey:'load-test',tripId:'test-trip'});
+    const loading=await confirmTripLoading(db,{actorId:'loader',idempotencyKey:'load-test',tripId:'test-trip'});
+    assert.equal(loading.status,'GROSS_CONFIRMED');
+    assert.equal((await q("SELECT processing_status FROM aimoc_execution_v1.weighbridge_inbox WHERE external_event_id='early-gross'")).rows[0].processing_status,'ACCEPTED');
     const reconciled=await reconcilePendingWeighbridgeEvents(db,{tripId:'test-trip'});
-    assert.equal(reconciled.processed,1);assert.equal(reconciled.remaining,0);
+    assert.equal(reconciled.processed,0);assert.equal(reconciled.remaining,0);
     assert.equal((await q(`SELECT actual_net_t,status FROM aimoc_execution_v1.trips WHERE id='test-trip'`)).rows[0].status,'GROSS_CONFIRMED');
   });
   await t.test('accepted signed weighing evidence cannot be rewritten or deleted',async()=>{

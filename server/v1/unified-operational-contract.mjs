@@ -74,15 +74,8 @@ export async function bindTripDriverAssignment(db,{actorId,tripId,assignmentId,d
    if(binding?.status!=='ACTIVE'||!binding.verified_at)
     fail('PENDING_DRIVER_VERIFICATION','Independently verified Driver identity required',409);
   }
-  const activeClaim=await one(c,`SELECT id FROM aimoc_execution_v1.resource_claims
-    WHERE released_at IS NULL AND (truck_id=$1 OR driver_id=$2) AND trip_id<>$3 LIMIT 1`,
-   [trip.truck_id,selectedDriverId,tripId]);
-  if(activeClaim)fail('DRIVER_TRUCK_BUSY','Truck or Driver has a conflicting active trip',409);
-  const existingDriverTask=await one(c,`SELECT a.trip_id FROM aimoc_execution_v1.trip_driver_assignments a
-    JOIN aimoc_execution_v1.trips t ON t.id=a.trip_id
-    WHERE a.driver_id=$1 AND a.status='ASSIGNED' AND a.trip_id<>$2
-      AND t.status NOT IN ('RETURNED_AVAILABLE','CANCELLED') LIMIT 1`,[selectedDriverId,tripId]);
-  if(existingDriverTask)fail('DRIVER_ALREADY_ASSIGNED','Driver has another unclosed assignment',409);
+  // Binding a QUEUED task is a future plan. Resource occupancy and FIFO are
+  // checked atomically at start, including assignments on other dispatches.
   const existing=await one(c,'SELECT * FROM aimoc_execution_v1.trip_driver_assignments WHERE trip_id=$1',[tripId]);
   if(existing){
    if(existing.driver_id===selectedDriverId&&existing.assignment_id===assignmentId&&
@@ -95,8 +88,10 @@ export async function bindTripDriverAssignment(db,{actorId,tripId,assignmentId,d
     fail('TRIP_ASSIGNMENT_LOCKED','Assignment cannot change after weighbridge evidence exists');
    await c.query('SET CONSTRAINTS aimoc_execution_v1.unified_trip_identity_fk DEFERRED');
    await c.query('UPDATE aimoc_execution_v1.trips SET driver_id=$1 WHERE id=$2',[selectedDriverId,tripId]);
+   // Preserve the task's queue timestamp when replacing its Driver; the truck
+   // must not jump behind later assignments merely because its operator changed.
    await c.query(`UPDATE aimoc_execution_v1.trip_driver_assignments
-     SET assignment_id=$1,driver_id=$2,assigned_by=$3,assigned_at=now()
+     SET assignment_id=$1,driver_id=$2,assigned_by=$3
      WHERE trip_id=$4`,[assignmentId,selectedDriverId,actorId,tripId]);
    await c.query(`INSERT INTO aimoc_execution_v1.integration_outbox(id,aggregate_id,event_type,payload)
      VALUES($1,$2,'TRIP_DRIVER_REASSIGNED',$3::jsonb)`,
