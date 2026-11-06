@@ -108,7 +108,7 @@ test('new LAND location automatically receives real trip inventory into its own 
  assert.deepEqual(await state(),beforeDelete,'Deleting a generated zero-balance target cannot strand an unplanned LAND request');
  const plan=await ok('request.plan',{requestId:req.result.requestId});
  const trip=plan.state.trips.find(x=>x.requestId===req.result.requestId);assert.equal(trip.destinationCrusherId,area.id);
- assert.equal(trip.assignmentMode,'AUTOMATIC');assert.equal(trip.assignedDriverUserId,driverId);assert.equal(trip.status,'queued');
+ assert.equal(trip.assignmentMode,'AUTOMATIC_SERIAL');assert.equal(trip.assignedDriverUserId,driverId);assert.equal(trip.status,'queued');
  const source=trip.crusherId==='crusher-1'?'stock1':'stock2';
  await ok('trip.qr',{tripId:trip.id});await ok('trip.start',{tripId:trip.id},'qa-driver');await ok('trip.tare',{tripId:trip.id,weightT:20},source);
  await ok('trip.loading',{tripId:trip.id},source);await ok('trip.gross',{tripId:trip.id,weightT:30},source);await ok('trip.depart',{tripId:trip.id},source);
