@@ -50,15 +50,17 @@ test('normal authenticated handler integrates an 80t marine request over two ser
   assert.equal((await call('/api/v1/demo/actions','POST',{}, {cookie:actors.admin.cookie})).status,403);
   const created=await ok('request.create',{transferMode:'MARINE',destinationLocationId:'stockpile-location-crusher-2',jettyId:'jetty-1',vesselId:'vessel-1',destination:'Marunda',lines:[{skuId:'split-12',quantity:80,unit:'t'}]});
   const requestId=created.result.requestId,requestKey=randomUUID();
-  const planned=await ok('request.plan',{requestId,assignments:[{truckId:state.trucks[0].id,driverUserId:actors.driver.id}]},'admin',{requestId:requestKey,expectedRevision:created.revision});
-  const replay=await ok('request.plan',{requestId,assignments:[{truckId:state.trucks[0].id,driverUserId:actors.driver.id}]},'admin',{requestId:requestKey,expectedRevision:created.revision});
+  const planned=await ok('request.plan',{requestId},'admin',{requestId:requestKey,expectedRevision:created.revision});
+  const replay=await ok('request.plan',{requestId},'admin',{requestId:requestKey,expectedRevision:created.revision});
   assert.equal(replay.replayed,true);assert.equal(replay.revision,planned.revision);
-  assert.equal((await action('request.plan',{requestId},'admin',{requestId:requestKey})).body.error,'IDEMPOTENCY_CONFLICT');
+  assert.equal((await action('request.plan',{requestId,destinationLocationId:'different-destination'},'admin',{requestId:requestKey})).body.error,'IDEMPOTENCY_CONFLICT');
   assert.equal((await action('request.create',{},'admin',{expectedRevision:created.revision})).body.error,'REVISION_CONFLICT');
   const trips=planned.state.trips;
   assert.equal(trips.length,2);assert.equal(new Set(trips.map(x=>x.dispatchId)).size,1);
-  assert.ok(trips.every(x=>x.source==='INTEGRATED_DEMO'&&x.assignedDriverUserId===actors.driver.id&&x.tonnageT===40));
-  assert.equal((await context('driver')).state.trips.length,2);
+  assert.ok(trips.every(x=>x.source==='INTEGRATED_DEMO'&&x.tonnageT===40));
+  assert.equal(trips.filter(x=>x.truckId===state.trucks[0].id&&x.assignedDriverUserId===actors.driver.id).length,1);
+  assert.equal(trips.filter(x=>x.status==='waiting_truck'&&x.truckId===null&&x.assignedDriverUserId===null).length,1);
+  assert.equal((await context('driver')).state.trips.length,1);
   assert.equal((await context('jetty2')).state.trips.length,0);
   assert.equal((await context('stock1')).drivers.length,0);
   const originalStock=new Map(planned.state.stockpiles.map(x=>[x.id,x.onHandM3]));
@@ -76,7 +78,7 @@ test('normal authenticated handler integrates an 80t marine request over two ser
     const started=await ok('trip.start',{tripId:trip.id},'driver');
     assert.equal(started.state.trips.find(x=>x.id===trip.id).status,'ready_to_load');
     if(i===0){
-      assert.equal((await action('trip.start',{tripId:trips[1].id},'driver')).status,409);
+      assert.equal((await action('trip.start',{tripId:trips[1].id},'driver')).status,403);
       const masterBypass=await call('/api/action','POST',{action:'master.truck.save',payload:{id:trip.truckId,active:false},requestId:randomUUID()},'admin');
       assert.equal(masterBypass.status,409);assert.equal(masterBypass.body.error,'ACTIVE_INTEGRATED_ASSIGNMENT');
       const bypass=await call('/api/action','POST',{action:'trip.depart',payload:{tripId:trip.id,tareT:25,grossT:65},requestId:randomUUID()},'admin');
@@ -102,7 +104,7 @@ test('normal authenticated handler integrates an 80t marine request over two ser
     const received=await ok('trip.receive',{tripId:trip.id,externalEventId:'receipt-'+i},'jetty1');
     assert.equal(received.state.vessels.find(x=>x.id==='vessel-1').loadedT,(i+1)*40);
     assert.equal((await action('trip.receive',{tripId:trip.id},'jetty1')).status,409);
-    if(i===0)assert.equal((await action('trip.start',{tripId:trips[1].id},'driver')).status,409);
+    if(i===0)assert.equal((await action('trip.start',{tripId:trips[1].id},'driver')).status,403);
     assert.equal((await action('trip.return',{tripId:trip.id},source)).status,409);
     await ok('trip.return_start',{tripId:trip.id},'driver');
     await ok('trip.return',{tripId:trip.id},source);
@@ -130,7 +132,7 @@ test('LAND multiSKU receipts update destination inventory without vessel effects
   const {state,actors,action,ok,context}=await fixture(t);
   const before=await context();
   const created=await ok('request.create',{transferMode:'LAND',destinationLocationId:'stockpile-location-crusher-2',destinationId:'crusher-2',destination:'Stockpile Marunda DEMO',lines:[{skuId:'split-12',quantity:12,unit:'m3'},{skuId:'basecourse',quantity:11,unit:'t'}]});
-  const planned=await ok('request.plan',{requestId:created.result.requestId,assignments:[{truckId:state.trucks[0].id,driverUserId:actors.driver.id}]});
+  const planned=await ok('request.plan',{requestId:created.result.requestId});
   assert.equal(planned.state.trips.length,2);
   for(const trip of planned.state.trips){
     assert.equal(trip.crusherId,'crusher-1');assert.equal(trip.destinationCrusherId,'crusher-2');
@@ -161,7 +163,7 @@ test('concurrent HTTP plans serialize revisions and identical retries reserve on
   const ids=[];
   for(let i=0;i<2;i++)ids.push((await ok('request.create',{transferMode:'MARINE',destinationLocationId:'stockpile-location-crusher-2',jettyId:'jetty-1',vesselId:'vessel-1',destination:'Concurrent demo',lines:[{skuId:'split-12',quantity:40,unit:'t'}]})).result.requestId);
   const revision=(await context()).revision;
-  const payload=requestId=>({requestId,assignments:[{truckId:state.trucks[0].id,driverUserId:actors.driver.id}]});
+  const payload=requestId=>({requestId});
   const results=await Promise.all(ids.map(id=>action('request.plan',payload(id),'admin',{expectedRevision:revision})));
   assert.deepEqual(results.map(x=>x.status).sort(),[200,409]);
   assert.equal(results.find(x=>x.status===409).body.error,'REVISION_CONFLICT');
@@ -173,8 +175,8 @@ test('concurrent HTTP plans serialize revisions and identical retries reserve on
   const planned=await context();
   assert.equal(planned.state.vessels[0].reservedT,80);assert.equal(planned.state.trips.length,2);
   const starts=await Promise.all(planned.state.trips.map(x=>action('trip.start',{tripId:x.id},'driver')));
-  assert.deepEqual(starts.map(x=>x.status).sort(),[200,409]);
-  const live=(await context()).state.trips.filter(x=>x.status!=='queued');
+  assert.deepEqual(starts.map(x=>x.status).sort(),[200,403]);
+  const live=(await context()).state.trips.filter(x=>!['queued','waiting_truck'].includes(x.status));
   assert.equal(live.length,1);
 });
 
@@ -195,7 +197,7 @@ test('shared destination master enforces route, identity, snapshot and legacy HT
  assert.equal(request.state.requests.find(x=>x.id===requestId).destination,payload.name);
  assert.equal(request.state.requests.find(x=>x.id===requestId).destinationId,'crusher-2');
  await ok('master.stockpileLocation.save',{...location,name:'Synthetic destination B'});
- const plan=await ok('request.plan',{requestId,assignments:[{truckId:'truck-1',driverUserId:actors.driver.id}]});
+ const plan=await ok('request.plan',{requestId});
  assert.equal(plan.state.trips.find(x=>x.requestId===requestId).destinationLocationSnapshot.name,payload.name);
  assert.equal(plan.state.dispatches.find(x=>x.requestId===requestId).destinationLocationSnapshot.name,payload.name);
  assert.equal((await action('master.stockpileLocation.save',{...location,active:false})).body.error,'OPEN_LOCATION_REFERENCE');

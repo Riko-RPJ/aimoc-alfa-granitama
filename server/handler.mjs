@@ -5,6 +5,7 @@ import {projectV1Read,isV1UnimplementedMutation} from './v1/read-model.mjs';
 import {permissionsForRole,authorizeLegacyAction,TARGET_ADMIN_CAPABILITIES} from './role-permissions.mjs';
 import {listCrusherLoadingPoints,saveCrusherLoadingPoint} from './crusher-location-master.mjs';
 import {handleIntegratedDemo,guardLegacyIntegratedMutation} from './integrated-demo-http.mjs';
+import {allocateAutomaticDispatch} from './automatic-dispatch.mjs';
 import {resolveStockpileDestination,guardReceivingCrusherMutation} from './stockpile-locations.mjs';
 
 const fail=(status,code,message)=>{throw Object.assign(new Error(message),{status,code});};
@@ -312,6 +313,10 @@ export function createHandler(db,{secure=false}={}) {
           const legacyPayload=destination?{transferMode:payload.transferMode||'MARINE',destination:destination.destination,lines:payload.lines,...(payload.transferMode==='LAND'?{destinationId:destination.destinationId}:{jettyId:payload.jettyId,vesselId:payload.vesselId})}:payload;
           const oldOutboxCount=state.erpOutbox.length;
           const actionResult=applyAction(state,body.action,legacyPayload,actor)||{message:'Tersimpan'};
+          if(body.action==='master.truck.save'&&state.trips.some(t=>t.status==='waiting_truck')){
+            const drivers=(await c.query("SELECT id,username,display_name,role,active FROM aimoc_alfa_ops.users WHERE role='driver' AND active=true ORDER BY username")).rows.map(userView);
+            actionResult.autoDispatch=allocateAutomaticDispatch(state,{drivers},actor);
+          }
           if(destination)Object.assign(state.requests.find(x=>x.id===actionResult.entityId),destination);
           if(body.action==='request.plan'){
             const request=state.requests.find(x=>x.id===payload.requestId);
@@ -337,7 +342,17 @@ export function createHandler(db,{secure=false}={}) {
           const masters=(await db.query('SELECT document FROM aimoc_alfa_ops.operation WHERE id=1')).rows[0].document;
           if(crusherIds.some(id=>!masters.crushers.some(c=>c.id===id&&c.active))||jettyIds.some(id=>!masters.jetties.some(j=>j.id===id&&j.active)))fail(400,'USER_SCOPE','Lokasi operator tidak terdaftar atau tidak aktif.');
           const id=randomUUID(),encoded=await passwordHash(b.password);
-          const row=(await db.query('INSERT INTO aimoc_alfa_ops.users(id,username,display_name,password_hash,role,crusher_ids,jetty_ids) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *',[id,username,b.displayName.trim().slice(0,100),encoded,b.role,crusherIds,jettyIds])).rows[0];return send(201,{user:userView(row)});
+          const row=await db.transaction(async c=>{
+            const locked=(await c.query('SELECT document FROM aimoc_alfa_ops.operation WHERE id=1 FOR UPDATE')).rows[0];
+            const created=(await c.query('INSERT INTO aimoc_alfa_ops.users(id,username,display_name,password_hash,role,crusher_ids,jetty_ids) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *',[id,username,b.displayName.trim().slice(0,100),encoded,b.role,crusherIds,jettyIds])).rows[0];
+            if(b.role==='driver'&&locked?.document.trips.some(t=>t.status==='waiting_truck')){
+              const state=structuredClone(locked.document);
+              const drivers=(await c.query("SELECT id,username,display_name,role,active FROM aimoc_alfa_ops.users WHERE role='driver' AND active=true ORDER BY username")).rows.map(userView);
+              allocateAutomaticDispatch(state,{drivers},actor);
+              await c.query('UPDATE aimoc_alfa_ops.operation SET document=$1::jsonb,revision=revision+1,updated_at=now() WHERE id=1',[JSON.stringify(state)]);
+            }
+            return created;
+          });return send(201,{user:userView(row)});
         }
       }
       if(path==='/api/evidence'&&method==='POST'){

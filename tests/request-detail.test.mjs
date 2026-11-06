@@ -16,16 +16,24 @@ const fingerprint = state => createHash('sha256').update(JSON.stringify(state)).
 function fixture() {
   const state = createSeed();
   state.trucks = state.trucks.slice(0, 2).map(truck => ({...truck, bedM3: 30, payloadLimitT: 40, credential: 'PRIVATE_TRUCK_CREDENTIAL'}));
-  // This creates one request spanning both Stock scopes and three actual trips,
-  // two of which belong to one truck/driver in a serial queue.
+  // Historical/manual serial representation, explicitly synthetic. Reservations
+  // come from the real planner; unexecuted assignments are shaped below solely
+  // to verify reading older canonical queues after the automatic cutover.
   state.stockpiles.find(stock => stock.crusherId === 'crusher-1' && stock.skuId === 'split-12').onHandM3 = 26.666667;
   state.stockpiles.find(stock => stock.crusherId === 'crusher-2' && stock.skuId === 'split-12').onHandM3 = 53.333333;
   const act = (action, payload, actor = admin) => applyIntegratedAction(state, action, payload, actor, {drivers});
   const create = (skuId, quantity, jettyId, vesselId) => act('request.create', {transferMode: 'MARINE', destinationLocationId: 'stockpile-location-crusher-2', destination: 'Not trusted', jettyId, vesselId, lines: [{skuId, quantity, unit: 't'}]}).requestId;
   const requestA = create('split-12', 120, 'jetty-1', 'vessel-1');
   const planA = act('request.plan', {requestId: requestA});
+  for (const trip of state.trips.filter(trip => trip.requestId === requestA && trip.status === 'waiting_truck')) Object.assign(trip, {status: 'queued', truckId: 'truck-1', assignedDriverUserId: driver1.id, assignmentMode: 'SYNTHETIC_LEGACY_SERIAL_FIXTURE', assignmentHold: null});
   const requestB = create('split-23', 60, 'jetty-2', 'vessel-3');
   const planB = act('request.plan', {requestId: requestB});
+  const originalB = state.trips.find(trip => trip.requestId === requestB);
+  const tail = {...structuredClone(originalB), id: 'trip-synthetic-legacy-B-tail', code: 'RIT-SYNTHETIC-B-TAIL', sequence: Math.max(...state.trips.map(trip => trip.sequence)) + 1, tonnageT: 20, volumeM3: 13.333333, status: 'queued', truckId: 'truck-1', assignedDriverUserId: driver1.id, assignmentMode: 'SYNTHETIC_LEGACY_SERIAL_FIXTURE', assignmentHold: null};
+  Object.assign(originalB, {tonnageT: 40, volumeM3: 26.666667, status: 'queued', truckId: 'truck-2', assignedDriverUserId: driver2.id, assignmentMode: 'SYNTHETIC_LEGACY_SERIAL_FIXTURE', assignmentHold: null});
+  state.trips.push(tail);
+  state.dispatches.find(dispatch => dispatch.id === planB.dispatchIds[0]).tripIds.push(tail.id);
+  planB.tripIds = state.trips.filter(trip => trip.requestId === requestB).map(trip => trip.id);
   state.requests.find(request => request.id === requestA).pricing = {secret: 'PRIVATE_PRICE'};
   state.requests.find(request => request.id === requestA).erpCredentials = 'PRIVATE_ERP_CREDENTIAL';
   state.trips.find(trip => trip.id === planA.tripIds[0]).authToken = 'PRIVATE_TRIP_TOKEN';
@@ -154,4 +162,67 @@ test('invalid cross-request dispatch reference cannot expose another dispatch or
   assert.equal(invalid.qr, null);
   assert.equal(invalid.waitingReason, 'DISPATCH_REFERENCE_INVALID');
   assert.ok(!JSON.stringify(detail).includes(planB.dispatchIds[0]));
+});
+
+test('actual automatic dispatch keeps waiting loads QR-free and publishes the next assignment only after verified return', () => {
+  const state = createSeed(), catalog = [driver1];
+  state.trucks = state.trucks.slice(0, 1).map(truck => ({...truck, bedM3: 30, payloadLimitT: 40}));
+  const act = (action, payload, actor = admin) => applyIntegratedAction(state, action, payload, actor, {drivers: catalog});
+  const requestId = act('request.create', {transferMode: 'MARINE', destinationLocationId: 'stockpile-location-crusher-2', jettyId: 'jetty-1', vesselId: 'vessel-1', lines: [{skuId: 'split-12', quantity: 120, unit: 't'}]}).requestId;
+  act('request.plan', {requestId});
+  const snapshot = () => {
+    const checksum = fingerprint(state), detail = requestDetail(state, admin, {requestId, drivers: catalog});
+    assert.equal(fingerprint(state), checksum, 'the detail GET never schedules cargo');
+    assert.equal(detail.summary.plannedT, 120);
+    assert.equal(detail.truckAssignments.length, 1);
+    assert.ok(detail.waitingLoads.every(trip => trip.status === 'waiting_truck' && trip.truckId === null && trip.assignedDriverUserId === null && trip.qr === null));
+    return detail;
+  };
+  const initial = snapshot();
+  assert.equal(initial.summary.assignedTrips, 1);
+  assert.equal(initial.summary.waitingTrips, 1);
+  assert.equal(initial.waitingLoads[0].tonnageT, 80);
+  const completedIds = [];
+  for (let cycle = 0; cycle < 3; cycle++) {
+    const before = snapshot(), current = state.trips.find(trip => trip.requestId === requestId && trip.status === 'queued');
+    assert.ok(current);
+    assert.equal(current.tonnageT, 40);
+    assert.equal(current.assignedDriverUserId, driver1.id);
+    const reference = before.trips.find(trip => trip.id === current.id).qr;
+    assert.equal(JSON.parse(reference.value).tripId, current.id);
+    assert.equal(JSON.parse(reference.value).truckId, 'truck-1');
+    const pendingBefore = state.trips.filter(trip => trip.requestId === requestId && trip.status === 'waiting_truck').map(trip => trip.id);
+    const tripId = current.id;
+    act('trip.qr', {tripId});
+    act('trip.tare', {tripId, weightT: 15});
+    act('trip.start', {tripId}, driver1);
+    act('trip.loading', {tripId});
+    act('trip.gross', {tripId, weightT: 55});
+    for (const action of ['depart', 'arrive', 'receive']) act(`trip.${action}`, {tripId});
+    // Receipt has delivered cargo but must not release the truck or assign the
+    // next waiting load. The independent return transition is the trigger.
+    let received = snapshot();
+    assert.equal(received.trips.filter(trip => trip.status === 'queued').length, 0);
+    for (const id of pendingBefore) assert.equal(received.trips.find(trip => trip.id === id).qr, null);
+    act('trip.return_start', {tripId}, driver1);
+    assert.equal(snapshot().trips.filter(trip => trip.status === 'queued').length, 0);
+    act('trip.return', {tripId});
+    completedIds.push(tripId);
+    const after = snapshot();
+    assert.equal(after.summary.completedTrips, cycle + 1);
+    assert.equal(after.summary.deliveredT, (cycle + 1) * 40);
+    assert.ok(after.trips.filter(trip => completedIds.includes(trip.id)).every(trip => trip.qr.historical));
+    if (pendingBefore.length) {
+      const next = after.trips.find(trip => trip.status === 'queued');
+      assert.ok(pendingBefore.includes(next.id), 'the canonical waiting ID becomes the next assignment');
+      assert.notEqual(next.id, tripId);
+      assert.ok(next.qr && !next.qr.historical);
+    }
+  }
+  const final = snapshot();
+  assert.equal(final.summary.completedTrips, 3);
+  assert.equal(final.summary.waitingTrips, 0);
+  assert.equal(final.summary.remainingT, 0);
+  assert.equal(final.truckAssignments[0].trips.length, 3, 'one truck card groups its three historical trip references');
+  assert.equal(state.requests.find(request => request.id === requestId).status, 'completed');
 });

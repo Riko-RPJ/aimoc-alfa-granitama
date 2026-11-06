@@ -21,9 +21,9 @@ test('authenticated request detail is request-scoped, read-only and never create
  const options={drivers:users.filter(u=>u.role==='driver').map(u=>({id:u.id,username:u.username,displayName:u.display_name,role:'driver',active:true}))};
  const act=(name,payload)=>applyIntegratedAction(state,name,payload,actors.admin,options);
  const request=(skuId,quantity,jettyId,vesselId)=>act('request.create',{transferMode:'MARINE',destinationLocationId:'stockpile-location-crusher-2',jettyId,vesselId,lines:[{skuId,quantity,unit:'t'}]}).requestId;
- const a=request('abu-batu',80,'jetty-1','vessel-1');act('request.plan',{requestId:a,assignments:[{truckId:'truck-1',driverUserId:'detail-driver-1'}]});
- const b=request('split-12',10,'jetty-2','vessel-3');act('request.plan',{requestId:b,assignments:[{truckId:'truck-2',driverUserId:'detail-driver-2'}]});
- const waiting=state.trips.filter(x=>x.requestId===a).at(-1);Object.assign(waiting,{status:'waiting_truck',truckId:null,assignedDriverUserId:null});
+ const a=request('abu-batu',80,'jetty-1','vessel-1');act('request.plan',{requestId:a});
+ const b=request('split-12',10,'jetty-2','vessel-3');act('request.plan',{requestId:b});
+ const waiting=state.trips.find(x=>x.requestId===a&&x.status==='waiting_truck');assert.ok(waiting);assert.equal(waiting.truckId,null);
  await db.query('UPDATE aimoc_alfa_ops.operation SET document=$1::jsonb,revision=41 WHERE id=1',[JSON.stringify(state)]);
  server=http.createServer(createHandler(db));await new Promise(r=>server.listen(0,'127.0.0.1',r));
  const origin='http://127.0.0.1:'+server.address().port;
@@ -32,16 +32,16 @@ test('authenticated request detail is request-scoped, read-only and never create
  const before=await snapshot(),actionCount=Number((await db.query('SELECT count(*)::int AS n FROM aimoc_alfa_ops.actions')).rows[0].n);
  assert.equal((await call(a)).status,401);
  const admin=await call(a,'admin');assert.equal(admin.status,200);assert.equal(admin.body.revision,41);assert.match(admin.headers.get('cache-control'),/no-store/);
- assert.equal(admin.body.request.id,a);assert.equal(admin.body.trips.length,3);assert.equal(admin.body.truckAssignments.length,1);assert.equal(admin.body.waitingLoads.length,1);
+ assert.equal(admin.body.request.id,a);assert.equal(admin.body.trips.length,3);assert.equal(admin.body.truckAssignments.length,2);assert.equal(admin.body.waitingLoads.length,1);
  assert.equal(admin.body.waitingLoads[0].id,waiting.id);assert.equal(admin.body.waitingLoads[0].qr,null);
  assert.ok(admin.body.trips.every(x=>x.requestId===a));assert.ok(admin.body.dispatches.every(x=>x.requestId===a));
  assert.ok(!JSON.stringify(admin.body).includes(b));assert.equal(admin.body.summary.plannedT,80);
- const codes=admin.body.truckAssignments[0].trips.map(x=>x.qr.value);assert.equal(new Set(codes).size,2);
- for(const value of codes){const q=JSON.parse(value);assert.equal(q.requestId,a);assert.equal(q.truckId,'truck-1');assert.equal(q.type,'AIMOC_ASSIGNMENT_REFERENCE');assert.ok(admin.body.trips.some(x=>x.id===q.tripId));}
+ const codes=admin.body.truckAssignments.flatMap(group=>group.trips.map(x=>x.qr.value));assert.equal(new Set(codes).size,2);
+ for(const value of codes){const q=JSON.parse(value);assert.equal(q.requestId,a);assert.equal(q.type,'AIMOC_ASSIGNMENT_REFERENCE');assert.ok(admin.body.trips.some(x=>x.id===q.tripId&&x.truckId===q.truckId));}
  const second=await call(b,'admin');assert.equal(second.status,200);assert.ok(second.body.trips.every(x=>x.requestId===b));assert.ok(!JSON.stringify(second.body).includes(a));
  assert.equal((await call(a,'jetty2')).status,404);assert.equal((await call(b,'jetty1')).status,404);assert.equal((await call(a,'jetty1')).status,200);
- assert.equal((await call(a,'detail-driver-2')).status,404);
- const owned=await call(a,'detail-driver-1');assert.equal(owned.status,200);assert.equal(owned.body.trips.length,2);assert.equal(owned.body.waitingLoads.length,0);assert.equal(owned.body.summary.plannedT,45);
+ assert.equal((await call(b,'detail-driver-1')).status,404);
+ const owned=await call(a,'detail-driver-1');assert.equal(owned.status,200);assert.equal(owned.body.trips.length,1);assert.equal(owned.body.waitingLoads.length,0);assert.equal(owned.body.summary.plannedT,40);
  const stock=await call(a,'stock2');assert.equal(stock.status,200);assert.equal(stock.body.trips.length,1);assert.equal(stock.body.summary.plannedT,35);assert.equal(stock.body.truckAssignments.length,0);
  assert.equal((await call(a,'admin','POST')).status,405);
  assert.equal((await call('req-does-not-exist','admin')).status,404);assert.equal((await call('bad%2Fid','admin')).status,400);
