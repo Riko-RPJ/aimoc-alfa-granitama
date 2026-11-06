@@ -51,5 +51,5 @@ export function driverAssignmentQr(state,actor,{tripId,drivers=[]}={}){
  const projected=detail.trips.find(row=>row.id===trip.id),projectedDispatch=detail.dispatches.find(row=>row.id===dispatch.id);
  if(!projected||!projectedDispatch||!projected.qr||projected.qr.isAuthorization!==false||projected.qr.physicalScan!==false)unavailable();
  const binding={requestId:request.id,dispatchId:dispatch.id,tripId:trip.id,truckId:truck.id,sourceStockpileId:stock.id,sourceCrusherId:crusher.id,skuId:product.id,assignedDriverUserId:trip.assignedDriverUserId};
- return {source:'INTEGRATED_DEMO',request:header(detail.request),dispatch:header(projectedDispatch),trip:projected,qr:projected.qr,binding,historical,canOpenTask:!historical,qrReferenceOnly:true,scanRecorded:false,authorizationGranted:false};
+ return {source:'INTEGRATED_DEMO',request:header(detail.request),dispatch:header(projectedDispatch),trip:{...projected,driverScan:visible.driverScan,driverScanMode:visible.driverScanMode||null,displayStatus:visible.displayStatus},qr:projected.qr,binding,historical,canOpenTask:false,canOpenTaskDeprecated:true,qrReferenceOnly:true,scanRecorded:false,authorizationGranted:false};
 }

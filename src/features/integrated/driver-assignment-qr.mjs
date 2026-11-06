@@ -16,7 +16,24 @@ export function selectDriverAssignmentQr(data,expectedTrip,driverUserId){
  if(typeof qr.value!=='string'||qr.value!==trip.qr?.value||qr.isAuthorization!==false||qr.physicalScan!==false||trip.qr?.isAuthorization!==false||trip.qr?.physicalScan!==false)return null;
  try{const reference=JSON.parse(qr.value),keys=['v','type','requestId','dispatchId','tripId','truckId'];if(!reference||Object.keys(reference).length!==keys.length||!keys.every(key=>Object.hasOwn(reference,key))||reference.v!==1||reference.type!=='AIMOC_ASSIGNMENT_REFERENCE'||!same(reference,binding,['requestId','dispatchId','tripId','truckId']))return null;}catch{return null;}
  const historical=data.historical===true||qr.historical===true||terminal.has(trip.status);
- return {trip,request:data.request,dispatch:data.dispatch,binding,qr,historical,canOpenTask:data.canOpenTask===true&&!historical};
+ return {trip,request:data.request,dispatch:data.dispatch,binding,qr,historical,driverScan:trip.driverScan||null};
+}
+
+/** The server supplies scan eligibility; displaying a QR alone grants no action. */
+export function driverScanStage(assignment){
+ const scan=assignment?.driverScan;
+ if(assignment?.historical||scan?.canScan!==true)return null;
+ if(scan.nextStage===1&&scan.phase==='FIRST_SCAN_READY')return 1;
+ if(scan.nextStage===2&&scan.phase==='READY_TO_LOAD')return 2;
+ return null;
+}
+
+/** Freeze one explicit intent for stable retry, including receipt/return on scan 2. */
+export function buildDriverScanIntent(assignment,expectedStage,externalEventId){
+ if(driverScanStage(assignment)!==expectedStage||!id(externalEventId)||typeof assignment?.qr?.value!=='string')return null;
+ const binding=assignment.binding;
+ if(!binding||!['requestId','dispatchId','tripId','truckId','assignedDriverUserId','sourceStockpileId','sourceCrusherId','skuId'].every(key=>id(binding[key])))return null;
+ return {tripId:binding.tripId,qrValue:assignment.qr.value,binding:{...binding},expectedStage,externalEventId,...(expectedStage===2?{confirmations:{materialReceived:true,truckReturned:true}}:{})};
 }
 
 export function driverAssignmentIdentity(trip,driverUserId){

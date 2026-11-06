@@ -36,7 +36,7 @@ test('Driver and Admin use bit-identical canonical QR bytes and expose only the 
  assert.deepEqual(JSON.parse(driverDto.qr.value),{v:1,type:'AIMOC_ASSIGNMENT_REFERENCE',requestId:target.requestId,dispatchId:target.dispatchId,tripId:target.id,truckId:target.truckId});
  assert.deepEqual(driverDto.binding,{requestId:target.requestId,dispatchId:target.dispatchId,tripId:target.id,truckId:target.truckId,sourceStockpileId:target.stockpileId,sourceCrusherId:target.crusherId,skuId:target.skuId,assignedDriverUserId:driver1.id});
  assert.equal(driverDto.qrReferenceOnly,true);assert.equal(driverDto.scanRecorded,false);assert.equal(driverDto.authorizationGranted,false);
- assert.equal(driverDto.qr.isAuthorization,false);assert.equal(driverDto.qr.physicalScan,false);assert.equal(driverDto.canOpenTask,true);
+ assert.equal(driverDto.qr.isAuthorization,false);assert.equal(driverDto.qr.physicalScan,false);assert.equal(driverDto.canOpenTask,false);assert.equal(driverDto.canOpenTaskDeprecated,true);
  assert.equal(driverDto.trip.id,target.id);assert.equal('trips' in driverDto,false);assert.equal('lines' in driverDto.request,false);assert.equal('summary' in driverDto.dispatch,false);
  const json=JSON.stringify(driverDto);
  for(const privateValue of ['PRIVATE_TEST_HASH','PRIVATE_ERP_SECRET','PRIVATE_OUTBOX_PAYLOAD',driver2.id,driver2.username,driver2.displayName])assert.ok(!json.includes(privateValue));
@@ -93,7 +93,7 @@ test('future serial task QR never bypasses queue order or creates a scan marker'
  const tasks=state.trips.filter(trip=>trip.requestId===a.requestId).sort((x,y)=>x.sequence-y.sequence),last=tasks.at(-1);
  const before=structuredClone(state),fingerprint=checksum(state);
  const dto=driverAssignmentQr(state,driver1,{tripId:last.id,drivers:catalog});
- assert.equal(dto.canOpenTask,true);assert.equal(dto.scanRecorded,false);
+ assert.equal(dto.canOpenTask,false);assert.equal(dto.canOpenTaskDeprecated,true);assert.equal(dto.scanRecorded,false);
  assert.ok(dto.qr.value);assert.equal(last.qrScannedAt,undefined);
  assert.deepEqual(state,before);assert.equal(checksum(state),fingerprint);
  assert.throws(()=>act('trip.start',{tripId:last.id},driver1),error=>error.code==='QUEUE_ORDER');

@@ -59,7 +59,7 @@ test('authenticated Driver assignment QR is exact, scoped, read-only and never g
     assert.equal(own.body.request.id, requestId); assert.equal(own.body.dispatch.id, serial[0].dispatchId);
     assert.deepEqual(own.body.binding, {requestId, dispatchId: serial[0].dispatchId, tripId: serial[0].id, truckId: serial[0].truckId, sourceStockpileId: serial[0].stockpileId, sourceCrusherId: serial[0].crusherId, skuId: serial[0].skuId, assignedDriverUserId: actors['qr-driver-1'].id});
     assert.equal(own.body.qrReferenceOnly, true); assert.equal(own.body.scanRecorded, false); assert.equal(own.body.authorizationGranted, false);
-    assert.equal(own.body.historical, false); assert.equal(own.body.canOpenTask, true);
+    assert.equal(own.body.historical, false); assert.equal(own.body.canOpenTask, false); assert.equal(own.body.canOpenTaskDeprecated, true);
     assert.equal(own.body.qr.isAuthorization, false); assert.equal(own.body.qr.physicalScan, false);
     const adminDetail = await call('/api/v1/demo/requests/' + requestId + '/detail', 'admin');
     assert.equal(adminDetail.status, 200);
