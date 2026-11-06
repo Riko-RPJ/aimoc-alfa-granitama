@@ -1,0 +1,6 @@
+node_modules
+.local
+.env*
+tests
+test-results
+CONTRACT.md

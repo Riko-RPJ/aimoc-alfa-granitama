@@ -1,0 +1,76 @@
+{
+  "checkedAt": "2026-11-05",
+  "purpose": "Branding for the authorized AIMOC Gandasari Alfa Granitama operational prototype",
+  "brandPolicy": "Only original AIMOC, Gandasari Group and PT Alfa Granitama marks; no Decom logo. Assets downloaded unchanged; all marks retain their respective owners.",
+  "verification": "Public official company homepage fetched successfully over HTTPS using Invoke-WebRequest. The search/browser renderer could not render gandasarigroup.com. Navigation/footer and subsidiary context were inspected in source and image contents were visually checked.",
+  "alfaStandaloneDomain": "www.alfagranitama.com currently renders a domain parking page in web search; this app therefore uses the group official subsidiary-logo asset, not a fabricated logo.",
+  "photosAreLive": false,
+  "assets": [
+    {
+      "type": "logo",
+      "provenance": "Existing AIMOC project asset, re-downloaded from the user-owned deployed application. Visually inspected: AIMOC only; no Decom mark.",
+      "file": "aimoc-logo.webp",
+      "sourcePage": "https://aimoc-weighbridge-phase1.vercel.app/",
+      "bytes": 23620,
+      "sourceUrl": "https://aimoc-weighbridge-phase1.vercel.app/assets/aimoc-logo.webp",
+      "sha256": "48a59ee74509fb5b77510e8d31f8380342148dd77fbad667e1f0f8527c8e2d34",
+      "localUrl": "/brand/aimoc-logo.webp",
+      "brand": "AIMOC"
+    },
+    {
+      "type": "logo",
+      "provenance": "Homepage navigation image with alt PT Gandasari Group Investama; original bytes preserved.",
+      "file": "gandasari-logo.png",
+      "sourcePage": "https://gandasarigroup.com/",
+      "bytes": 36517,
+      "sourceUrl": "https://gandasarigroup.com/storage/img/ggi-logo.png",
+      "sha256": "a214be98f764756428b1b561168aaecb64e9a37686c9c542e530e5d93b6f71a1",
+      "localUrl": "/brand/gandasari-logo.png",
+      "brand": "Gandasari Group"
+    },
+    {
+      "type": "logo",
+      "provenance": "Homepage footer image with alt Gandasari Logo; original bytes preserved.",
+      "file": "gandasari-logo-white.png",
+      "sourcePage": "https://gandasarigroup.com/",
+      "bytes": 20524,
+      "sourceUrl": "https://gandasarigroup.com/storage/img/ggi-logo-w.png",
+      "sha256": "3d9e3944cc7e5772d457edd19534c44e5b5bc275189c45d861c6d7c79a4ec1e5",
+      "localUrl": "/brand/gandasari-logo-white.png",
+      "brand": "Gandasari Group"
+    },
+    {
+      "type": "logo",
+      "provenance": "Official group homepage subsidiary-logo carousel image; actual Alfa Granitama wordmark visually confirmed. Original bytes preserved.",
+      "file": "alfa-granitama-logo.png",
+      "sourcePage": "https://gandasarigroup.com/",
+      "bytes": 180808,
+      "sourceUrl": "https://gandasarigroup.com/storage/img/ag-logo.png",
+      "sha256": "76b5a2cfef8dcd21004cad67ce9af15dc1a9273b1182ed3c2befcb50b83f067d",
+      "localUrl": "/brand/alfa-granitama-logo.png",
+      "brand": "PT Alfa Granitama"
+    },
+    {
+      "type": "quarry_photo",
+      "provenance": "Official group homepage Alfa Granitama business card background. Shows actual crusher and aggregate stockpiles. Historical editorial/company image, not a live camera feed.",
+      "file": "alfa-granitama-quarry.jpg",
+      "sourcePage": "https://gandasarigroup.com/",
+      "bytes": 96853,
+      "sourceUrl": "https://gandasarigroup.com/storage/img/bg-alfa-granitama.jpg",
+      "sha256": "4c038f6317c684c2d618c784249a22576ef9f3210886c769d1339a885d5635de",
+      "localUrl": "/brand/alfa-granitama-quarry.jpg",
+      "brand": "PT Alfa Granitama"
+    },
+    {
+      "type": "quarry_photo",
+      "provenance": "Official group homepage mining service image with alt Pertambangan Gandasari. Historical editorial/company image, not a live camera feed.",
+      "file": "gandasari-mining.jpg",
+      "sourcePage": "https://gandasarigroup.com/",
+      "bytes": 113454,
+      "sourceUrl": "https://gandasarigroup.com/storage/img/gandasari-mining.jpg",
+      "sha256": "4bedf51d2cab822060ac09cd389b3a46c52bd9b107f2ded70f9584d104f082c4",
+      "localUrl": "/brand/gandasari-mining.jpg",
+      "brand": "Gandasari Group"
+    }
+  ]
+}

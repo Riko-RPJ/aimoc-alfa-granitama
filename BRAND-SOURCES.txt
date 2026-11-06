@@ -1,0 +1,17 @@
+BRAND ASSETS — AIMOC GANDASARI ALFA GRANITAMA
+Checked: 5 November 2026
+
+Official Gandasari source: https://gandasarigroup.com/
+- Gandasari logo: /storage/img/ggi-logo.png
+- Gandasari white logo: /storage/img/ggi-logo-w.png
+- PT Alfa Granitama logo: /storage/img/ag-logo.png
+- Alfa Granitama quarry aerial: /storage/img/bg-alfa-granitama.jpg
+- Mining aerial: /storage/img/gandasari-mining.jpg
+The main group homepage explicitly includes Alfa Granitama in its business-unit cards and subsidiary-logo carousel. Both logo images and quarry photographs were visually inspected. Use the photographs as company imagery only, never label them as a live camera feed.
+
+AIMOC source: https://aimoc-weighbridge-phase1.vercel.app/assets/aimoc-logo.webp
+Reuses the existing user-owned AIMOC application mark. It contains AIMOC and its tagline, with no Decom mark. The file has a dark background and a 3:2 overall canvas; CSS display cropping may be used in a compact logo slot without modifying source bytes.
+
+Alfa standalone website www.alfagranitama.com currently returns a parked-domain page through web search. No marks from that parked page were used.
+
+Files are original downloaded bytes. SHA256 and byte counts are recorded in BRAND-SOURCES.json. All marks retain their respective brand ownership; no logo was invented or redrawn.

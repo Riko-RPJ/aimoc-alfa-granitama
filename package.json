@@ -1,0 +1,17 @@
+{
+  "name": "aimoc-alfa-operations",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {"node": "22.x"},
+  "scripts": {
+    "dev": "node scripts/local.mjs",
+    "build": "vite build",
+    "test": "node --test --test-concurrency=1 tests/*.test.mjs",
+    "db:setup": "node scripts/setup.mjs"
+  },
+  "dependencies": {
+    "react": "19.2.0", "react-dom": "19.2.0", "lucide-react": "0.548.0", "recharts": "3.3.0", "pg": "8.23.1"
+  },
+  "devDependencies": {"vite": "7.1.12", "@electric-sql/pglite": "0.5.12"}
+}
