@@ -118,7 +118,7 @@ test('cumulative reservation audit protects unrelated integrated jobs and reject
   // All fleet is reserved by the legacy batch; a dedicated synthetic truck
   // demonstrates another owner's reservation that cancellation must not release.
   state.trucks.push({id: 'dedicated-truck', code: 'DT-999', active: true, bedM3: 30, payloadLimitT: 40, cycleMinutes: 30});
-  applyIntegratedAction(state, 'request.plan', {requestId: integratedRequest.entityId, assignments: [{truckId: 'dedicated-truck', driverUserId: driver.id}]}, admin, {drivers: [driver]});
+  applyIntegratedAction(state, 'request.plan', {requestId: integratedRequest.entityId}, admin, {drivers: [driver]});
   const current = {...options, expectedFingerprint: legacyOperationFingerprint(state)};
   const otherTrip = state.trips.find(trip => trip.source === 'INTEGRATED_DEMO');
   const otherStockId = otherTrip.stockpileId;

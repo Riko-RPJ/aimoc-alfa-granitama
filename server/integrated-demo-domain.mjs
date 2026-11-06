@@ -2,6 +2,8 @@ import { randomUUID, createHash } from 'node:crypto';
 import {isDispatchSourceArea} from '../shared/inventory-areas.mjs';
 import { applyAction, DomainError } from './domain.mjs';
 import {ensureStockpileLocations, stockpileLocationsForRead, applyStockpileLocationAction, resolveStockpileDestination, ensureReceivingStockpilesForRequest} from './stockpile-locations.mjs';
+import {scheduleAutomaticDispatch,automaticDispatchSummary,refreshAutomaticDispatchProgress as aggregate} from './automatic-dispatch.mjs';
+export {allocateAutomaticDispatch,upgradeToAutomaticDispatch} from './automatic-dispatch.mjs';
 
 // This is an explicitly synthetic workflow over the existing operation document.
 // It does not write normalized production evidence or manufacture verification.
@@ -25,7 +27,7 @@ const scope = (u, role, locationId) => {
 };
 const driver = (u, t) => { if (u?.role !== 'driver' || u.id !== t.assignedDriverUserId) fail('Hanya pengemudi yang ditugaskan dapat menjalankan tugas ini.', 'FORBIDDEN', 403); };
 const open = t => !['returned', 'cancelled'].includes(t.status);
-const active = t => open(t) && t.status !== 'queued';
+const active = t => open(t) && !['queued','waiting_truck'].includes(t.status);
 const integrated = t => t.source === SOURCE;
 const list = x => Array.isArray(x) ? x : [];
 const stable = value => Array.isArray(value) ? value.map(stable) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(k => [k, stable(value[k])])) : value;
@@ -47,29 +49,6 @@ function erp(s, type, t) {
   s.erpOutbox.push({id: id('erp'), createdAt: timestamp(), type, entityId: t.id, status: 'awaiting_configuration', system: 'oracle_netsuite', source: SOURCE, synthetic: true, payload: {tripId: t.id, tripCode: t.code, requestId: t.requestId, dispatchId: t.dispatchId, skuId: t.skuId, volumeM3: t.volumeM3, tonnageT: t.tonnageT, sourceStockpileId: t.stockpileId, destinationStockpileId: t.destinationStockpileId || null, jettyId: t.jettyId, vesselId: t.vesselId, receiptCode: t.receiptCode || null, quantitySource: SOURCE, ...locationFields(t)}});
 }
 
-function aggregate(s) {
-  for (const d of s.dispatches.filter(integrated)) {
-    const trips = s.trips.filter(t => t.dispatchId === d.id);
-    const received = trips.filter(t => t.receivedAt);
-    d.completedTrips = trips.filter(t => t.status === 'returned').length;
-    d.receivedTrips = received.length;
-    d.pendingTrips = trips.length - d.completedTrips;
-    d.deliveredM3 = round(received.reduce((sum, t) => sum + t.volumeM3, 0));
-    d.deliveredT = round(received.reduce((sum, t) => sum + t.tonnageT, 0));
-    d.remainingT = round(Math.max(0, d.tonnageT - d.deliveredT));
-    d.deliveryStatus = received.length === trips.length ? 'received' : received.length ? 'partial' : 'pending';
-    d.status = trips.length && d.completedTrips === trips.length ? 'completed' : trips.some(t => t.status !== 'queued') ? 'in_progress' : 'planned';
-  }
-  for (const r of s.requests.filter(integrated)) {
-    const dispatches = s.dispatches.filter(d => d.requestId === r.id);
-    r.deliveredM3 = round(dispatches.reduce((sum, d) => sum + (d.deliveredM3 || 0), 0));
-    r.deliveredT = round(dispatches.reduce((sum, d) => sum + (d.deliveredT || 0), 0));
-    r.remainingT = round(Math.max(0, r.lines.reduce((sum, line) => sum + line.tonnageT, 0) - r.deliveredT));
-    r.pendingTrips = dispatches.reduce((sum, d) => sum + d.pendingTrips, 0);
-    if (dispatches.length) r.status = dispatches.every(d => d.status === 'completed') ? 'completed' : dispatches.some(d => d.status === 'in_progress') ? 'in_progress' : 'planned';
-    r.deliveryStatus = r.remainingT <= EPS && dispatches.length ? 'received' : r.deliveredT > EPS ? 'partial' : 'pending';
-  }
-}
 
 function destination(s, request, skuId, requestedStockpileId) {
   const crusher = row(s, 'crushers', request.destinationId);
@@ -130,35 +109,8 @@ function planRequest(s, p, actor, options) {
   const resolved = resolveStockpileDestination(s, {...request, ...(p.destinationLocationId === undefined ? {} : {destinationLocationId: p.destinationLocationId})}, {allowLegacy: true});
   if (!request.destinationLocationSnapshot) Object.assign(request, resolved);
   else if (request.transferMode === 'LAND' && (request.destinationLocationSnapshot.receivingCrusherId !== resolved.destinationId || request.destinationId !== resolved.destinationId)) fail('Snapshot area penerimaan tidak sesuai lokasi tujuan.', 'DESTINATION_MISMATCH', 409);
-  const drivers = driverCatalog(options.drivers);
+  if(['assignments','truckId','driverUserId','assignedDriverUserId'].some(key=>p[key]!==undefined))fail('Alokasi truk dan pengemudi dilakukan otomatis; assignment manual tidak diperbolehkan.','MANUAL_ASSIGNMENT_NOT_ALLOWED',400);
   const trucks = s.trucks.filter(t => t.active);
-  if (!trucks.length) fail('Tidak ada truk aktif.', 'NO_TRUCKS', 409);
-  if (!drivers.length) fail('Buat akun driver aktif sebelum merencanakan.', 'NO_DRIVERS', 409);
-  const existingBindings = new Map();
-  for (const t of s.trips.filter(open)) if (t.assignedDriverUserId) {
-    const prev = existingBindings.get(t.truckId);
-    if (prev && prev !== t.assignedDriverUserId) fail('Penugasan truk yang masih terbuka tidak konsisten.', 'ASSIGNMENT_CONFLICT', 409);
-    existingBindings.set(t.truckId, t.assignedDriverUserId);
-  }
-  let assignments;
-  if (p.assignments !== undefined) {
-    if (!Array.isArray(p.assignments) || !p.assignments.length) fail('Pilih setidaknya satu pasangan truk dan pengemudi.');
-    assignments = p.assignments.map(a => ({truck: trucks.find(t => t.id === a.truckId) || fail('Truk penugasan tidak aktif.', 'TRUCK_UNAVAILABLE', 409), driver: drivers.find(d => d.id === a.driverUserId) || fail('Pengemudi penugasan tidak aktif.', 'DRIVER_UNAVAILABLE', 409)}));
-  } else {
-    assignments = [];
-    const used = new Set();
-    for (const truck of trucks.filter(candidate => !s.trips.some(t => open(t) && t.truckId === candidate.id && !t.assignedDriverUserId))) {
-      const binding = existingBindings.get(truck.id);
-      const candidate = binding ? drivers.find(d => d.id === binding && !used.has(d.id)) : drivers.find(d => !used.has(d.id) && ![...existingBindings.entries()].some(([tid, did]) => tid !== truck.id && did === d.id));
-      if (candidate) { assignments.push({truck, driver: candidate}); used.add(candidate.id); }
-    }
-  }
-  if (!assignments.length) fail('Tidak ada pasangan truk/pengemudi yang tersedia.', 'NO_ASSIGNMENTS', 409);
-  if (new Set(assignments.map(a => a.truck.id)).size !== assignments.length || new Set(assignments.map(a => a.driver.id)).size !== assignments.length) fail('Satu pengemudi harus terikat pada satu truk; antrean serial tetap diperbolehkan.', 'ASSIGNMENT_CONFLICT', 409);
-  for (const a of assignments) {
-    if ((existingBindings.has(a.truck.id) && existingBindings.get(a.truck.id) !== a.driver.id) || [...existingBindings.entries()].some(([tid, did]) => tid !== a.truck.id && did === a.driver.id)) fail('Selesaikan antrean sebelum mengganti pengemudi/truk.', 'ASSIGNMENT_CONFLICT', 409);
-    if (s.trips.some(t => open(t) && t.truckId === a.truck.id && !t.assignedDriverUserId)) fail('Truk memiliki pekerjaan legacy yang belum selesai.', 'TRUCK_BUSY', 409);
-  }
   const marine = request.transferMode === 'MARINE';
   const vessel = marine ? row(s, 'vessels', request.vesselId) : null;
   const requestedT = round(request.lines.reduce((sum, line) => sum + line.tonnageT, 0));
@@ -166,7 +118,7 @@ function planRequest(s, p, actor, options) {
   if (vessel && requestedT > vessel.payloadLimitT - vessel.loadedT - vessel.reservedT + EPS) fail('Sisa kapasitas kapal termasuk reservasi tidak cukup.', 'VESSEL_CAPACITY', 409);
   const dispatch = {id: id('dsp'), code: nextCode('DSP', s.dispatches), requestId: request.id, transferMode: request.transferMode, source: SOURCE, synthetic: true, ...locationFields(request), destinationId: request.destinationId || null, jettyId: request.jettyId, vesselId: request.vesselId, allocations: [], tripIds: [], status: 'planned', createdAt: timestamp(), completedTrips: 0, deliveredM3: 0, deliveredT: 0};
   let sequence = s.trips.reduce((max, t) => Math.max(max, t.sequence || 0), 0);
-  const load = new Map(assignments.map(a => [a.truck.id, s.trips.filter(t => t.truckId === a.truck.id && open(t)).length]));
+  let estimatedTrips=0;
   for (const line of request.lines) {
     const product = row(s, 'products', line.skuId);
     if (!product.active) fail('SKU nonaktif.', 'INACTIVE_SOURCE', 409);
@@ -175,31 +127,24 @@ function planRequest(s, p, actor, options) {
     let remainingT = line.tonnageT;
     for (const stock of stocks) {
       const availableM3 = round(stock.onHandM3 - stock.reservedM3);
-      let sourceT = round(Math.min(remainingT, availableM3 * line.densityTPerM3));
+      const sourceT = round(Math.min(remainingT, availableM3 * line.densityTPerM3));
       const sourceBudgetM3 = round(Math.min(availableM3, sourceT / line.densityTPerM3));
       const allocation = {stockpileId: stock.id, crusherId: stock.crusherId, skuId: line.skuId, volumeM3: 0, tonnageT: 0};
-      while (sourceT > 0) {
+      if (sourceT > 0) {
         if (dispatch.tripIds.length >= 2000 || s.trips.length >= 20000) fail('Rencana melampaui batas 2.000 ritase.', 'TRIP_LIMIT', 409);
-        const assignment = [...assignments].sort((a, b) => load.get(a.truck.id) - load.get(b.truck.id) || a.truck.code.localeCompare(b.truck.code))[0];
-        const truck = assignment.truck;
-        const tonnageT = round(Math.min(sourceT, truck.payloadLimitT, truck.bedM3 * line.densityTPerM3));
-        if (tonnageT <= 0) fail('Kapasitas truk tidak valid.');
-        // Tonnes are split first so e.g. 80t with a 40t payload is two trips.
-        // The final m3 slice uses the remaining source budget: independently
-        // rounding every trip must never reserve a micro-m3 above physical stock.
-        const volumeM3 = round(Math.min(tonnageT / line.densityTPerM3, sourceBudgetM3 - allocation.volumeM3));
+        const capacities=(trucks.length?trucks:s.trucks).map(truck=>Math.min(truck.payloadLimitT,truck.bedM3*line.densityTPerM3)).filter(cap=>Number.isFinite(cap)&&cap>0);
+        estimatedTrips+=capacities.length?Math.ceil((sourceT-EPS)/Math.min(...capacities)):1;
+        if(estimatedTrips>2000||s.trips.length+estimatedTrips>20000)fail('Rencana melampaui batas 2.000 ritase.','TRIP_LIMIT',409);
+        const tonnageT=sourceT,volumeM3=sourceBudgetM3;
         if (volumeM3 <= 0) fail('Kuantitas terlalu kecil untuk presisi volume demo.', 'QUANTITY_PRECISION', 409);
         if (round(stock.reservedM3 + volumeM3) > stock.onHandM3) fail('Pembulatan reservasi melebihi stok tersedia.', 'INSUFFICIENT_STOCK', 409);
-        const readyMinutes = load.get(truck.id) * truck.cycleMinutes;
-        const trip = {id: id('trip'), code: nextCode('RIT', s.trips), source: SOURCE, synthetic: true, quantitySource: 'PLANNED_DEMO', requestId: request.id, dispatchId: dispatch.id, transferMode: request.transferMode, ...locationFields(request), stockpileId: stock.id, crusherId: stock.crusherId, skuId: line.skuId, destinationId: request.destinationId || null, destinationStockpileId: target?.id || null, destinationCrusherId: target?.crusherId || null, truckId: truck.id, assignedDriverUserId: assignment.driver.id, jettyId: request.jettyId, vesselId: request.vesselId, densityTPerM3: line.densityTPerM3, volumeM3, tonnageT, status: 'queued', sequence: ++sequence, createdAt: timestamp(), estimatedStartAt: new Date(Date.now() + readyMinutes * 60000).toISOString(), estimatedReturnAt: new Date(Date.now() + (readyMinutes + truck.cycleMinutes) * 60000).toISOString(), weighingEvents: []};
+        const trip = {id: id('trip'), code: nextCode('RIT', s.trips), source: SOURCE, synthetic: true, quantitySource: 'PLANNED_DEMO', requestId: request.id, dispatchId: dispatch.id, transferMode: request.transferMode, ...locationFields(request), stockpileId: stock.id, crusherId: stock.crusherId, skuId: line.skuId, destinationId: request.destinationId || null, destinationStockpileId: target?.id || null, destinationCrusherId: target?.crusherId || null, truckId:null,assignedDriverUserId:null,assignmentMode:'AUTOMATIC',jettyId: request.jettyId, vesselId: request.vesselId, densityTPerM3: line.densityTPerM3, volumeM3, tonnageT, status:'waiting_truck',sequence:++sequence,queueSequence:sequence,createdAt:timestamp(),estimatedStartAt:null,estimatedReturnAt:null,weighingEvents:[]};
         s.trips.push(trip);
         dispatch.tripIds.push(trip.id);
         stock.reservedM3 = round(stock.reservedM3 + volumeM3);
         allocation.volumeM3 = round(allocation.volumeM3 + volumeM3);
         allocation.tonnageT = round(allocation.tonnageT + tonnageT);
-        sourceT = round(sourceT - tonnageT);
         remainingT = round(remainingT - tonnageT);
-        load.set(truck.id, load.get(truck.id) + 1);
       }
       if (allocation.tonnageT > 0) dispatch.allocations.push(allocation);
       if (remainingT === 0) break;
@@ -216,8 +161,9 @@ function planRequest(s, p, actor, options) {
   if (vessel) vessel.reservedT = round(vessel.reservedT + dispatch.tonnageT);
   Object.assign(request, {dispatchId: dispatch.id, status: 'planned', plannedAt: timestamp(), plannedBy: actor.id, planningStatus: 'INTEGRATED_DEMO'});
   event(s, actor, 'request.planned', request.id);
+  const scheduling=scheduleAutomaticDispatch(s,options,actor);
   aggregate(s);
-  return {entityId: request.id, requestId: request.id, dispatchIds: [dispatch.id], tripIds: dispatch.tripIds, source: SOURCE};
+  return {entityId: request.id, requestId: request.id, dispatchIds: [dispatch.id], tripIds: dispatch.tripIds, source: SOURCE,...scheduling,autoDispatch:automaticDispatchSummary(s,dispatch.id)};
 }
 
 function checkTarget(s, t) {
@@ -252,6 +198,7 @@ function moveTrip(s, action, p, actor, options) {
   else if (['start', 'return_start'].includes(action)) driver(actor, t);
   else if (['arrive', 'receive'].includes(action)) destinationScope();
   else sourceScope();
+  if(t.status==='waiting_truck')fail('Muatan menunggu truk dan pengemudi tersedia; belum dapat dieksekusi.','WAITING_FOR_TRUCK',409);
   const eventId = p.externalEventId ?? p.eventId;
   const normalized = {...p}; delete normalized.externalEventId; delete normalized.eventId;
   const digest = fingerprint({action, payload: normalized});
@@ -333,8 +280,9 @@ function moveTrip(s, action, p, actor, options) {
   reconcile(t);
   const audit = event(s, actor, `trip.${action}`, t.id, eventId === undefined ? {} : {externalEventId: eventId, eventFingerprint: digest});
   if (action === 'qr') t.qrEventId = audit.id;
+  const scheduling=action==='return'?scheduleAutomaticDispatch(s,options,actor):{};
   aggregate(s);
-  return {entityId: t.id, tripId: t.id, source: SOURCE, status: t.status};
+  return {entityId: t.id, tripId: t.id, source: SOURCE, status: t.status,...scheduling};
 }
 
 /** Apply to a draft and replace only after validation, including direct callers. */
@@ -383,10 +331,10 @@ export function integratedView(state, actor, options = {}) {
     const sourceAllowed = actor.role === 'admin' || actor.role === 'stock' && (actor.crusherIds || []).includes(t.crusherId);
     const destinationAllowed = actor.role === 'admin' || actor.role === (t.transferMode === 'LAND' ? 'stock' : 'jetty') && (actor[t.transferMode === 'LAND' ? 'crusherIds' : 'jettyIds'] || []).includes(t.transferMode === 'LAND' ? t.destinationCrusherId : t.jettyId);
     const assigned = actor.role === 'driver' && actor.id === t.assignedDriverUserId;
-    const blocked = allTrips.find(other => other.id !== t.id && open(other) && (other.truckId === t.truckId || other.assignedDriverUserId === t.assignedDriverUserId) && (active(other) || other.sequence < t.sequence));
+    const blocked = allTrips.find(other => other.id !== t.id && open(other) && other.truckId && (other.truckId === t.truckId || other.assignedDriverUserId === t.assignedDriverUserId) && (active(other) || other.sequence < t.sequence));
     const driverActive = driverCatalog(options.drivers).some(d => d.id === t.assignedDriverUserId);
     result.canStart = assigned && t.status === 'queued' && !blocked && driverActive && state.trucks.find(truck => truck.id === t.truckId)?.active === true;
-    result.blockReason = t.status === 'queued' && blocked ? 'PREVIOUS_TRIP_NOT_RETURNED' : t.status === 'queued' && !driverActive ? 'DRIVER_INACTIVE' : t.status === 'start_pending' ? !t.qrScannedAt ? 'QR_REQUIRED' : 'TARE_REQUIRED' : null;
+    result.blockReason = t.status==='waiting_truck'?'WAITING_FOR_TRUCK':t.status === 'queued' && blocked ? 'PREVIOUS_TRIP_NOT_RETURNED' : t.status === 'queued' && !driverActive ? 'DRIVER_INACTIVE' : t.status === 'start_pending' ? !t.qrScannedAt ? 'QR_REQUIRED' : 'TARE_REQUIRED' : null;
     if (actor.role === 'admin' && ['queued', 'start_pending', 'ready_to_load'].includes(t.status) && !t.qrScannedAt) allowed.push('trip.qr');
     if (sourceAllowed && ['queued', 'start_pending'].includes(t.status) && !list(t.weighingEvents).some(e => e.type === 'TARE')) allowed.push('trip.tare');
     if (result.canStart) allowed.push('trip.start');
@@ -407,6 +355,7 @@ export function integratedView(state, actor, options = {}) {
   view.requests = view.requests.filter(requestVisible);
   view.dispatches = view.dispatches.filter(d => integrated(d) && (actor.role === 'admin' || dispatchIds.has(d.id)));
   if (actor.role !== 'admin') {
+    delete view.automaticDispatchUpgrade;
     view.dispatches = view.dispatches.map(d => {
       const assignedTrips = view.trips.filter(t => t.dispatchId === d.id);
       const stockIds = new Set(assignedTrips.map(t => t.stockpileId));
@@ -415,11 +364,11 @@ export function integratedView(state, actor, options = {}) {
         return {...a, volumeM3: round(subset.reduce((sum, t) => sum + t.volumeM3, 0)), tonnageT: round(subset.reduce((sum, t) => sum + t.tonnageT, 0))};
       });
       const received = assignedTrips.filter(t => t.receivedAt);
-      return {...d, tripIds: assignedTrips.map(t => t.id), allocations, stockpileIds: [...stockIds], crusherIds: [...new Set(assignedTrips.map(t => t.crusherId))], skuIds: [...new Set(assignedTrips.map(t => t.skuId))], stockpileId: stockIds.size === 1 ? [...stockIds][0] : null, crusherId: new Set(assignedTrips.map(t => t.crusherId)).size === 1 ? assignedTrips[0].crusherId : null, skuId: new Set(assignedTrips.map(t => t.skuId)).size === 1 ? assignedTrips[0].skuId : null, volumeM3: round(assignedTrips.reduce((sum, t) => sum + t.volumeM3, 0)), tonnageT: round(assignedTrips.reduce((sum, t) => sum + t.tonnageT, 0)), deliveredM3: round(received.reduce((sum, t) => sum + t.volumeM3, 0)), deliveredT: round(received.reduce((sum, t) => sum + t.tonnageT, 0)), remainingT: round(assignedTrips.filter(t => !t.receivedAt).reduce((sum, t) => sum + t.tonnageT, 0)), deliveryStatus: received.length === assignedTrips.length ? 'received' : received.length ? 'partial' : 'pending', status: assignedTrips.every(t => t.status === 'returned') ? 'completed' : assignedTrips.some(t => t.status !== 'queued') ? 'in_progress' : 'planned', completedTrips: assignedTrips.filter(t => t.status === 'returned').length, receivedTrips: received.length, pendingTrips: assignedTrips.filter(open).length, scoped: true};
+      return {...d, tripIds: assignedTrips.map(t => t.id), allocations, stockpileIds: [...stockIds], crusherIds: [...new Set(assignedTrips.map(t => t.crusherId))], skuIds: [...new Set(assignedTrips.map(t => t.skuId))], stockpileId: stockIds.size === 1 ? [...stockIds][0] : null, crusherId: new Set(assignedTrips.map(t => t.crusherId)).size === 1 ? assignedTrips[0].crusherId : null, skuId: new Set(assignedTrips.map(t => t.skuId)).size === 1 ? assignedTrips[0].skuId : null, volumeM3: round(assignedTrips.reduce((sum, t) => sum + t.volumeM3, 0)), tonnageT: round(assignedTrips.reduce((sum, t) => sum + t.tonnageT, 0)), deliveredM3: round(received.reduce((sum, t) => sum + t.volumeM3, 0)), deliveredT: round(received.reduce((sum, t) => sum + t.tonnageT, 0)), remainingT: round(assignedTrips.filter(t => !t.receivedAt).reduce((sum, t) => sum + t.tonnageT, 0)), deliveryStatus: received.length === assignedTrips.length ? 'received' : received.length ? 'partial' : 'pending', status: assignedTrips.every(t => t.status === 'returned') ? 'completed' : assignedTrips.some(t => !['queued','waiting_truck'].includes(t.status)) ? 'in_progress' : 'planned', completedTrips: assignedTrips.filter(t => t.status === 'returned').length, receivedTrips: received.length, pendingTrips: assignedTrips.filter(open).length,autoDispatch:automaticDispatchSummary({...state,trips:assignedTrips},d.id),scoped: true};
     });
     view.requests = view.requests.map(request => {
       const assignedTrips = view.trips.filter(t => t.requestId === request.id);
-      if (!assignedTrips.length) return {...request, lines: [], scoped: true};
+      if (!assignedTrips.length) return {...request, lines: [],autoDispatch:automaticDispatchSummary({...state,trips:[]}),scoped: true};
       const skus = new Set(assignedTrips.map(t => t.skuId));
       const received = assignedTrips.filter(t => t.receivedAt);
       const lines = request.lines.filter(line => skus.has(line.skuId)).map(line => {
@@ -428,7 +377,7 @@ export function integratedView(state, actor, options = {}) {
         return {...line, tonnageT, volumeM3, quantity: line.unit === 't' ? tonnageT : volumeM3};
       });
       const deliveredT = round(received.reduce((sum, t) => sum + t.tonnageT, 0));
-      return {...request, lines, deliveredT, deliveredM3: round(received.reduce((sum, t) => sum + t.volumeM3, 0)), remainingT: round(lines.reduce((sum, line) => sum + line.tonnageT, 0) - deliveredT), deliveryStatus: received.length === assignedTrips.length ? 'received' : received.length ? 'partial' : 'pending', status: assignedTrips.every(t => t.status === 'returned') ? 'completed' : assignedTrips.some(t => t.status !== 'queued') ? 'in_progress' : 'planned', pendingTrips: assignedTrips.filter(open).length, scoped: true};
+      return {...request, lines, deliveredT, deliveredM3: round(received.reduce((sum, t) => sum + t.volumeM3, 0)), remainingT: round(lines.reduce((sum, line) => sum + line.tonnageT, 0) - deliveredT), deliveryStatus: received.length === assignedTrips.length ? 'received' : received.length ? 'partial' : 'pending', status: assignedTrips.every(t => t.status === 'returned') ? 'completed' : assignedTrips.some(t => !['queued','waiting_truck'].includes(t.status)) ? 'in_progress' : 'planned', pendingTrips: assignedTrips.filter(open).length,autoDispatch:automaticDispatchSummary({...state,trips:assignedTrips}),scoped: true};
     });
     view.events = view.events.filter(e => tripIds.has(e.entityId));
     view.erpOutbox = [];
@@ -452,7 +401,7 @@ export function integratedView(state, actor, options = {}) {
   view.trucks = fleet;
   view.fleet = fleet;
   view.drivers = driverCatalog(options.drivers).filter(d => actor.role === 'admin' || d.id === actor.id).map(d => ({id: d.id, name: d.name || d.displayName || d.username || d.id, username: d.username, role: 'driver', active: true}));
-  view.integratedDemo = {source: SOURCE, synthetic: true, productionEvidence: false, netsuitePosting: 'awaiting_configuration', activeTrips: fleet.filter(t => t.status === 'busy').length};
+  view.integratedDemo = {source: SOURCE, synthetic: true, productionEvidence: false, netsuitePosting: 'awaiting_configuration', activeTrips: fleet.filter(t => t.status === 'busy').length,autoDispatch:automaticDispatchSummary(actor.role==='admin'?state:{...state,trips:view.trips})};
   const sum = (rows, field) => round(rows.reduce((total, item) => total + (item[field] || 0), 0));
   view.metrics = {onHandM3: sum(view.stockpiles, 'onHandM3'), reservedM3: sum(view.stockpiles, 'reservedM3'), availableM3: round(sum(view.stockpiles, 'onHandM3') - sum(view.stockpiles, 'reservedM3')), inTransitM3: sum(view.trips.filter(t => ['in_transit', 'arrived'].includes(t.status)), 'volumeM3'), deliveredM3: sum(view.trips.filter(t => t.receivedAt), 'volumeM3'), deliveredT: sum(view.trips.filter(t => t.receivedAt), 'tonnageT'), availableTrucks: fleet.filter(t => t.status === 'available').length, busyTrucks: fleet.filter(t => t.status === 'busy').length, allocatedTrucks: fleet.filter(t => t.status === 'allocated').length, activeTrips: view.trips.filter(active).length, queuedTrips: view.trips.filter(t => t.status === 'queued').length, completedTrips: view.trips.filter(t => t.status === 'returned').length, openRequests: view.requests.filter(r => r.status !== 'completed').length, erpPending: view.erpOutbox.length};
   for (const stock of view.stockpiles) if (stock.onHandM3 !== undefined) stock.availableM3 = round(stock.onHandM3 - stock.reservedM3);

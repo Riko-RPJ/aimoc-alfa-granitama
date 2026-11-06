@@ -24,10 +24,10 @@ function seed({twoTrucks = false} = {}) {
   return s;
 }
 
-function request(s, {mode = 'LAND', tonnes = 80, lines, assignments} = {}) {
+function request(s, {mode = 'LAND', tonnes = 80, lines} = {}) {
   const payload = {transferMode: mode, destination: mode === 'LAND' ? 'Crusher 2 receiving' : 'Marunda by barge', lines: lines || [{skuId: 'split-12', quantity: tonnes, unit: 't'}], ...(mode === 'LAND' ? {destinationId: 'crusher-2'} : {jettyId: 'jetty-1', vesselId: 'vessel-1'})};
   const created = act(s, 'request.create', payload);
-  const planned = act(s, 'request.plan', {requestId: created.entityId, ...(assignments ? {assignments} : {})});
+  const planned = act(s, 'request.plan', {requestId: created.entityId});
   return {requestId: created.entityId, ...planned};
 }
 
@@ -61,16 +61,17 @@ test('LAND 80 tonnes, one 40 tonne truck: two serial trips conserve inventory an
   const result = request(s);
   assert.equal(result.tripIds.length, 2);
   assert.deepEqual(s.trips.map(t => t.tonnageT), [40, 40]);
-  assert.ok(s.trips.every(t => t.truckId === s.trucks[0].id && t.assignedDriverUserId === driver1.id));
+  assert.equal(s.trips.filter(t => t.truckId === s.trucks[0].id && t.assignedDriverUserId === driver1.id).length, 1);
+  assert.equal(s.trips.filter(t => t.status === 'waiting_truck' && t.truckId === null && t.assignedDriverUserId === null).length, 1);
   close(s.stockpiles.find(x => x.id === source.id).reservedM3, 80 / 1.5);
   const [first, second] = result.tripIds;
   loadAndDepart(s, first);
-  assert.throws(() => act(s, 'trip.start', {tripId: second}, driver1), e => e.code === 'TRUCK_OR_DRIVER_BUSY');
+  assert.throws(() => act(s, 'trip.start', {tripId: second}, driver1), e => e.code === 'FORBIDDEN');
   act(s, 'trip.arrive', {tripId: first}, stock2);
   act(s, 'trip.receive', {tripId: first}, stock2);
   assert.equal(s.dispatches[0].status, 'in_progress');
   assert.equal(s.dispatches[0].deliveryStatus, 'partial');
-  assert.throws(() => act(s, 'trip.start', {tripId: second}, driver1), e => e.code === 'TRUCK_OR_DRIVER_BUSY');
+  assert.throws(() => act(s, 'trip.start', {tripId: second}, driver1), e => e.code === 'FORBIDDEN');
   act(s, 'trip.return_start', {tripId: first}, driver1);
   act(s, 'trip.return', {tripId: first}, stock1);
   loadAndDepart(s, second, {startFirst: true});
@@ -203,25 +204,38 @@ test('assigned driver, location scopes and destination/truck identity are enforc
   assert.throws(() => act(s, 'trip.return', {tripId: identifier}, jetty1), e => e.code === 'FORBIDDEN');
 });
 
-test('assignment planner requires active drivers and preserves stable truck-driver binding across queued requests', () => {
+test('automatic planner retains waiting work without Drivers, rejects manual binding and allocates older cargo first', () => {
   const s = seed();
   const created = act(s, 'request.create', {transferMode: 'LAND', destinationId: 'crusher-2', destination: 'Marunda', lines: [{skuId: 'split-12', quantity: 80, unit: 't'}]});
-  assert.throws(() => act(s, 'request.plan', {requestId: created.entityId}, admin, {drivers: []}), e => e.code === 'NO_DRIVERS');
-  act(s, 'request.plan', {requestId: created.entityId, assignments: [{truckId: s.trucks[0].id, driverUserId: driver1.id}]});
+  act(s, 'request.plan', {requestId: created.entityId}, admin, {drivers: []});
+  assert.equal(s.trips.length, 1);
+  assert.equal(s.trips[0].status, 'waiting_truck');
+  assert.equal(s.trips[0].tonnageT, 80);
+  assert.equal(s.trips[0].truckId, null);
+  assert.equal(s.trips[0].assignedDriverUserId, null);
   const extra = act(s, 'request.create', {transferMode: 'LAND', destinationId: 'crusher-2', destination: 'Marunda', lines: [{skuId: 'split-23', quantity: 40, unit: 't'}]});
-  assert.throws(() => act(s, 'request.plan', {requestId: extra.entityId, assignments: [{truckId: s.trucks[0].id, driverUserId: driver2.id}]}), e => e.code === 'ASSIGNMENT_CONFLICT');
+  const beforeManual = structuredClone(s);
+  assert.throws(() => act(s, 'request.plan', {requestId: extra.entityId, assignments: [{truckId: s.trucks[0].id, driverUserId: driver2.id}]}), e => e.code === 'MANUAL_ASSIGNMENT_NOT_ALLOWED');
+  assert.deepEqual(s, beforeManual);
   act(s, 'request.plan', {requestId: extra.entityId});
   assert.equal(s.trips.length, 3);
-  assert.ok(s.trips.every(t => t.assignedDriverUserId === driver1.id));
-  assert.throws(() => act(s, 'trip.start', {tripId: s.trips[2].id}, driver1), e => e.code === 'QUEUE_ORDER');
+  const assigned = s.trips.filter(t => t.truckId);
+  assert.equal(assigned.length, 1);
+  assert.equal(assigned[0].assignedDriverUserId, driver1.id);
+  assert.equal(assigned[0].requestId, created.entityId);
+  assert.ok(s.trips.filter(t => t.status === 'waiting_truck').every(t => t.truckId === null && t.assignedDriverUserId === null));
+  const nextRequestCargo = s.trips.find(t => t.requestId === extra.entityId);
+  assert.throws(() => act(s, 'trip.start', {tripId: nextRequestCargo.id}, driver1), e => e.code === 'FORBIDDEN');
 });
 
 test('role views expose only their trips/allocations while all actors see truthful global fleet occupancy', () => {
   const s = seed({twoTrucks: true});
   const result = request(s, {mode: 'MARINE', tonnes: 80});
+  s.automaticDispatchUpgrade = {version: 1, detachedTripIds: [...result.tripIds], actorId: admin.id, beforeSha256: 'synthetic-admin-only-audit'};
   const first = s.trips.find(t => t.assignedDriverUserId === driver1.id);
   act(s, 'trip.start', {tripId: first.id}, driver1);
   const otherDriver = integratedView(s, driver2, options);
+  assert.equal(otherDriver.automaticDispatchUpgrade, undefined, 'Global migration audit IDs stay Admin-only');
   assert.ok(otherDriver.trips.every(t => t.assignedDriverUserId === driver2.id));
   assert.equal(otherDriver.fleet.find(t => t.id === first.truckId).status, 'busy');
   assert.equal(otherDriver.fleet.find(t => t.id === first.truckId).activeTripId, null);
@@ -231,6 +245,7 @@ test('role views expose only their trips/allocations while all actors see truthf
   assert.ok(otherDriver.stockpiles.every(stock => stock.onHandM3 === undefined && stock.reservedM3 === undefined));
   const unrelatedStock = first.crusherId === 'crusher-1' ? stock2 : stock1;
   const stockView = integratedView(s, unrelatedStock, options);
+  assert.equal(stockView.automaticDispatchUpgrade, undefined);
   assert.equal(stockView.trips.length, 0);
   assert.equal(stockView.dispatches.length, 0);
   assert.equal(stockView.fleet.find(t => t.id === first.truckId).status, 'busy');
