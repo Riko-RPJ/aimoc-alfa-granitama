@@ -1,5 +1,6 @@
 import { randomUUID, createHash } from 'node:crypto';
 import {isDispatchSourceArea} from '../shared/inventory-areas.mjs';
+import {summarizeDriverDailyTrips} from './driver-daily-summary.mjs';
 import { applyAction, DomainError } from './domain.mjs';
 import {ensureStockpileLocations, stockpileLocationsForRead, applyStockpileLocationAction, resolveStockpileDestination, ensureReceivingStockpilesForRequest} from './stockpile-locations.mjs';
 import {scheduleAutomaticDispatch,automaticDispatchSummary,truckAvailability,assertSerialDispatchClaims,refreshAutomaticDispatchProgress as aggregate} from './automatic-dispatch.mjs';
@@ -308,6 +309,7 @@ export function applyIntegratedAction(state, action, payload, actor, options = {
 export function integratedView(state, actor, options = {}) {
   if (!actor?.id || !['admin', 'stock', 'jetty', 'driver'].includes(actor.role)) fail('Akun tidak berwenang.', 'FORBIDDEN', 403);
   const view = structuredClone(state);
+  delete view.driverDailySummary;
   view.stockpileLocations = stockpileLocationsForRead(state);
   const allTrips = state.trips;
   const fleet = state.trucks.map(truck => {
@@ -408,6 +410,7 @@ export function integratedView(state, actor, options = {}) {
   for (const stock of view.stockpiles) if (stock.onHandM3 !== undefined) stock.availableM3 = round(stock.onHandM3 - stock.reservedM3);
   for (const vessel of view.vessels) vessel.remainingT = round(vessel.payloadLimitT - vessel.loadedT - vessel.reservedT);
   view.access = {role: actor.role, crusherIds: actor.crusherIds || [], jettyIds: actor.jettyIds || []};
+  if(actor.role==='driver')view.driverDailySummary=summarizeDriverDailyTrips(state,actor,{now:options.now,includeCarryover:true});
   view.erpStatus = 'awaiting_configuration';
   return view;
 }
