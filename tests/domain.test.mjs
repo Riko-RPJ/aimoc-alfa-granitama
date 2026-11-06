@@ -35,12 +35,13 @@ test('one SKU sourced from multiple stockpiles keeps one dispatch ID across all 
 test('multiSKU request shares one dispatch ID while reserving ship capacity once',()=>{const s=createSeed();const id=request(s,1,'m3',{lines:[{skuId:'split-12',quantity:100,unit:'m3'},{skuId:'basecourse',quantity:165,unit:'t'}]});act(s,'request.plan',{requestId:id});const requestTrips=s.trips.filter(t=>t.requestId===id);assert.equal(s.vessels[0].reservedT,315);assert.equal(s.stockpiles.reduce((a,x)=>a+x.reservedM3,0),200);assert.equal(s.dispatches.filter(d=>d.requestId===id).length,1);assert.equal(new Set(requestTrips.map(t=>t.dispatchId)).size,1);assert.equal(new Set(s.dispatches[0].skuIds).size,2);});
 test('warehouse actor cannot mutate another crusher and jetty actor cannot receive another jetty',()=>{const s=createSeed(),t=plan(s,28)[0];const wrongStock={id:'s2',role:'stock',crusherIds:[]};assert.throws(()=>act(s,'trip.start',{tripId:t.id},wrongStock),e=>e.status===403);for(const a of ['start','depart'])act(s,`trip.${a}`,movement(t,a));assert.throws(()=>act(s,'trip.arrive',{tripId:t.id},{id:'j2',role:'jetty',jettyIds:['jetty-2']}),e=>e.status===403);act(s,'trip.arrive',{tripId:t.id},jetty);assert.throws(()=>act(s,'trip.unload',{tripId:t.id,vesselId:'vessel-2'},jetty),e=>e.code==='DESTINATION_MISMATCH');});
 test('waiting vessel cannot receive until Admin activates loading',()=>{const s=createSeed(),t=plan(s,28,'m3',{vesselId:'vessel-2'})[0];for(const a of ['start','depart','arrive'])act(s,`trip.${a}`,movement(t,a));assert.throws(()=>act(s,'trip.unload',{tripId:t.id}),e=>e.code==='VESSEL_NOT_LOADING');act(s,'master.vessel.save',{id:'vessel-2',status:'loading'});act(s,'trip.unload',{tripId:t.id});assert.equal(s.vessels[1].loadedT,42);});
-test('Admin cannot submit stockpile measurement, but Stockpile can submit and Admin may approve',()=>{
+test('Admin and scoped Stockpile can submit survey measurements; approval remains Admin-only',()=>{
  const s=createSeed();
- assert.throws(()=>act(s,'measurement.create',{stockpileId:'stock-1-1',method:'manual',volumeM3:750},admin),e=>e.status===403);
- assert.equal(s.measurements.length,0);
- const pending=act(s,'measurement.create',{stockpileId:'stock-1-1',method:'manual',volumeM3:750},stock);
+ const adminSurvey=act(s,'measurement.create',{stockpileId:'stock-1-1',method:'manual',volumeM3:750},admin);
  assert.equal(s.measurements.length,1);
+ assert.throws(()=>act(s,'measurement.approve',{measurementId:adminSurvey.entityId},stock),e=>e.status===403);
+ const pending=act(s,'measurement.create',{stockpileId:'stock-1-1',method:'manual',volumeM3:750},stock);
+ assert.equal(s.measurements.length,2);
  assert.equal(act(s,'measurement.approve',{measurementId:pending.entityId},admin).entityId,pending.entityId);
 });
 test('photo without calibration cannot produce or approve cubic meters',()=>{const s=createSeed(),res=act(s,'measurement.create',{stockpileId:'stock-1-1',skuId:'abu-batu',method:'camera_pending',volumeM3:999,evidenceId:'photo-1'},stock);const m=s.measurements[0];assert.equal(m.volumeM3,null);assert.equal(m.status,'needs_calibration');assert.throws(()=>act(s,'measurement.approve',{measurementId:res.entityId}),e=>e.code==='INVALID_MEASUREMENT');assert.equal(s.stockpiles[0].onHandM3,650);});

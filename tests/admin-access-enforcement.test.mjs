@@ -10,7 +10,7 @@ import {legacyPageFromPath,legacyPathForPage,legacyNavigationByRole} from '../sr
 
 test('Admin role permission catalog is explicit and target-only features remain disabled',()=>{
  assert.equal(authorizeLegacyAction('admin','request.plan').allowed,true);
- assert.equal(authorizeLegacyAction('admin','measurement.create').allowed,false);
+ assert.equal(authorizeLegacyAction('admin','measurement.create').allowed,true);
  assert.equal(authorizeLegacyAction('admin','measurement.approve').allowed,true);
  assert.equal(authorizeLegacyAction('stock','measurement.create').allowed,true);
  assert.equal(authorizeLegacyAction('admin','master.truck.save').allowed,true);
@@ -74,9 +74,12 @@ test('real backend capabilities endpoint matches role and rejects forbidden stat
   assert.deepEqual(crossRead.data.data.items,[]);
   assert.equal((await response(stock1.username,'GET','/api/v1/transfer-requests')).status,403);
   assert.equal((await response(stock1.username,'GET','/api/v1/dispatches')).status,403);
-  const adminForbidden=await response(admin.username,'POST','/api/action',{requestId:'admin-forbidden-measurement',action:'measurement.create',payload:{stockpileId:'stock-1-1',method:'manual',volumeM3:500}});
-  assert.equal(adminForbidden.status,403);
-  assert.equal(adminForbidden.data.error,'PERMISSION_DENIED');
+  const adminSurvey=await response(admin.username,'POST','/api/action',{requestId:'admin-survey-measurement',action:'measurement.create',payload:{stockpileId:'stock-1-1',method:'manual',quantityValue:750,quantityUnit:'t'}});
+  assert.equal(adminSurvey.status,200);
+  const adminMeasurement=adminSurvey.data.state.measurements.find(m=>m.id===adminSurvey.data.result.entityId);
+  assert.equal(adminMeasurement.quantityValue,750);
+  assert.equal(adminMeasurement.quantityUnit,'t');
+  assert.equal(adminMeasurement.volumeM3,500);
   const beforeDenied=Number((await db.query('SELECT revision FROM aimoc_alfa_ops.operation WHERE id=1')).rows[0].revision);
   for(const action of ['request.create','request.plan','master.product.save']){
    const denied=await response(stock1.username,'POST','/api/action',{requestId:'deny-'+action.replaceAll('.','-'),action,payload:{role:'admin',crusherIds:['crusher-2']}});
