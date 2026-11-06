@@ -15,6 +15,16 @@ WIM source, normalized execution cutover or Oracle NetSuite posting.
    occupies its truck and reserves stock/capacity, even when not displayed in
    that workspace. The default planner skips unassigned legacy-busy trucks;
    if all trucks are occupied, resolve that work before planning new trips.
+   For an explicitly confirmed published UAT environment with no hardware and
+   no execution evidence, `server/legacy-demo-reconciliation.mjs` provides an
+   offline preview/apply helper. It requires an exact trip allowlist, expected
+   document fingerprint, request ID, count, Admin actor and batch reason. Run
+   it only inside a locked database transaction after a private backup and
+   reservation/evidence audit. It cancels unexecuted queued/loading demo work,
+   releases only its reservations, and retains all history. It never invents
+   weighing, receiving, return or ERP evidence. Physical/partially executed
+   work must be held for operator reconciliation. No reconciliation endpoint
+   is exposed by the application and no automatic startup cancellation occurs.
 3. Run the explicit application database setup/migration with the intended
    environment's server-side database configuration: `npm run db:setup`.
    This transaction adds `driver` to the existing user-role constraint and
