@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 export { createSeed } from './seed.mjs';
 
 const EPS=0.0000005, r=n=>Math.round(n*1e6)/1e6, now=()=>new Date().toISOString();
-const activeStatuses=new Set(['loading','in_transit','arrived','unloaded']);
+const activeStatuses=new Set(['start_pending','ready_to_load','loading','weighed','in_transit','arrived','unloaded','returning']);
 export class DomainError extends Error { constructor(message,code='VALIDATION',status=400){super(message);this.name='DomainError';this.code=code;this.status=status;} }
 const fail=(message,code,status)=>{throw new DomainError(message,code,status);};
 const text=(x,label,max=160)=>{if(typeof x!=='string'||!x.trim()||x.trim().length>max)fail(`${label} wajib diisi (maks. ${max} karakter).`);return x.trim();};
@@ -14,7 +14,13 @@ const scope=(u,role,id)=>{if(u?.role==='admin')return;if(u?.role!==role||!(u[rol
 const uid=prefix=>`${prefix}-${randomUUID()}`;
 const code=(prefix,list)=>`${prefix}-${String(list.length+1).padStart(5,'0')}`;
 const nextReceiptCode=s=>`RCV-${String(s.trips.reduce((max,t)=>{const match=/^RCV-(\d+)$/.exec(t.receiptCode||'');return match?Math.max(max,Number(match[1])):max;},0)+1).padStart(5,'0')}`;
-const record=(s,u,type,entityId,description)=>{s.events.push({id:uid('evt'),at:now(),actorId:u.id,actorName:u.name||u.username||u.id,role:u.role,type,entityId,description});if(s.events.length>1500)s.events.splice(0,s.events.length-1500);};
+const record=(s,u,type,entityId,description)=>{
+  s.events.push({id:uid('evt'),at:now(),actorId:u.id,actorName:u.name||u.username||u.id,role:u.role,type,entityId,description});
+  // Integrated event identities are retry receipts, not expendable UI history.
+  // Bound only the legacy history; keep all integrated evidence in its order.
+  const legacy=s.events.filter(e=>e.source!=='INTEGRATED_DEMO');
+  if(legacy.length>1500){const expired=new Set(legacy.slice(0,legacy.length-1500));s.events=s.events.filter(e=>!expired.has(e));}
+};
 const erp=(s,type,entityId,payload)=>{s.erpOutbox.push({id:uid('erp'),createdAt:now(),type,entityId,status:'awaiting_configuration',system:'oracle_netsuite',payload});};
 const ledger=(s,u,type,stockpileId,volumeM3,referenceId)=>s.inventoryLedger.push({id:uid('led'),at:now(),actorId:u.id,type,stockpileId,volumeM3:r(volumeM3),referenceId});
 const tripScope=(s,u,t,role)=>scope(u,role,role==='stock'?get(s,'stockpiles',t.stockpileId).crusherId:t.jettyId);
@@ -158,7 +164,8 @@ function moveTrip(s,action,p,u){
   }
   if(action==='depart'){
     if(stock.onHandM3+EPS<t.volumeM3||stock.reservedM3+EPS<t.volumeM3)fail('Saldo stok/reservasi tidak mencukupi.','STOCK_CONFLICT',409);
-    if(p.tareT!==undefined||p.grossT!==undefined){const tareT=num(p.tareT,'Tare (ton)'),grossT=positive(p.grossT,'Gross (ton)');if(grossT<=tareT||Math.abs(r(grossT-tareT)-t.tonnageT)>0.001)fail('Netto timbang harus sesuai kuantitas reservasi. Selisih memerlukan rekonsiliasi Admin.','WEIGHT_RECONCILIATION',409);t.tareT=tareT;t.grossT=grossT;t.quantitySource='operator_entered_weight';}else t.quantitySource='dispatch_plan_confirmed_by_operator';
+    if(p.tareT===undefined||p.grossT===undefined)fail('Tare dan gross wajib dicatat sebelum keberangkatan.','WEIGHT_REQUIRED',409);
+    const tareT=positive(p.tareT,'Tare (ton)'),grossT=positive(p.grossT,'Gross (ton)');if(grossT<=tareT||Math.abs(r(grossT-tareT)-t.tonnageT)>0.001)fail('Netto timbang harus sesuai kuantitas reservasi. Selisih memerlukan rekonsiliasi Admin.','WEIGHT_RECONCILIATION',409);t.tareT=tareT;t.grossT=grossT;t.quantitySource='operator_entered_weight';
     stock.onHandM3=r(stock.onHandM3-t.volumeM3);stock.reservedM3=r(stock.reservedM3-t.volumeM3);t.departedAt=now();ledger(s,u,'transfer_departed',stock.id,-t.volumeM3,t.id);erp(s,'stock_transfer_departed',t.id,{tripCode:t.code,skuId:t.skuId,volumeM3:t.volumeM3,tonnageT:t.tonnageT,sourceStockpileId:stock.id,jettyId:t.jettyId,vesselId:t.vesselId});
   }
   if(action==='arrive')t.arrivedAt=now();
@@ -263,7 +270,8 @@ export function publicState(s,u){
     const ids=new Set(u.jettyIds||[]);view.jetties=view.jetties.filter(x=>ids.has(x.id));view.vessels=view.vessels.filter(x=>ids.has(x.jettyId));view.trips=view.trips.filter(x=>ids.has(x.jettyId));view.dispatches=view.dispatches.filter(x=>ids.has(x.jettyId));view.requests=view.requests.filter(x=>ids.has(x.jettyId));view.measurements=[];view.inventoryLedger=[];
   }
   if(u.role!=='admin'){const visible=new Set([...view.stockpiles,...view.trips,...view.dispatches,...view.requests,...view.measurements].map(x=>x.id));view.events=view.events.filter(x=>visible.has(x.entityId));view.erpOutbox=view.erpOutbox.filter(x=>visible.has(x.entityId));}
-  view.trucks=view.trucks.map(t=>metricsForTruck(u.role==='stock'?view:s,t));
+  const visibleTripIds=new Set(view.trips.map(t=>t.id));
+  view.trucks=view.trucks.map(t=>{const metrics=metricsForTruck(s,t);if(u.role!=='admin'){if(!visibleTripIds.has(metrics.activeTripId))metrics.activeTripId=null;if(!visibleTripIds.has(metrics.nextTripId))metrics.nextTripId=null;}return metrics;});
   const sum=(arr,key)=>r(arr.reduce((a,x)=>a+(x[key]||0),0));const activeTrips=view.trips.filter(t=>activeStatuses.has(t.status));
   view.metrics={onHandM3:sum(view.stockpiles,'onHandM3'),reservedM3:sum(view.stockpiles,'reservedM3'),availableM3:r(sum(view.stockpiles,'onHandM3')-sum(view.stockpiles,'reservedM3')),inTransitM3:sum(view.trips.filter(t=>['in_transit','arrived'].includes(t.status)),'volumeM3'),deliveredM3:sum(view.trips.filter(t=>['unloaded','returned'].includes(t.status)),'volumeM3'),deliveredT:sum(view.trips.filter(t=>['unloaded','returned'].includes(t.status)),'tonnageT'),availableTrucks:view.trucks.filter(t=>t.status==='available').length,busyTrucks:view.trucks.filter(t=>t.status==='busy').length,allocatedTrucks:view.trucks.filter(t=>t.status==='allocated').length,activeTrips:activeTrips.length,queuedTrips:view.trips.filter(t=>t.status==='queued').length,completedTrips:view.trips.filter(t=>['unloaded','returned'].includes(t.status)).length,openRequests:view.requests.filter(t=>t.status!=='completed').length,pendingMeasurements:view.measurements.filter(m=>m.status==='pending').length,erpPending:view.erpOutbox.length};
   view.products=view.products.map(p=>({...p,onHandM3:sum(view.stockpiles.filter(x=>x.skuId===p.id),'onHandM3'),reservedM3:sum(view.stockpiles.filter(x=>x.skuId===p.id),'reservedM3')}));

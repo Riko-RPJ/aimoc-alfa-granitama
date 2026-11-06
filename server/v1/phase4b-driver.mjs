@@ -66,8 +66,10 @@ export async function getDriverActiveTrip(db,{actor}){
     ${assignmentJoin}
     WHERE t.driver_id=$1 AND t.status IN ('QUEUED','START_AUTHORIZED','TARE_CONFIRMED','LOADING','GROSS_CONFIRMED',
       'IN_TRANSIT','ARRIVED','UNLOADED_VERIFIED','RETURNING','ON_HOLD')
-    ORDER BY t.started_at DESC NULLS LAST,t.id LIMIT 2`,[driver.id])).rows;
-  if(rows.length>1)fail('DRIVER_DOUBLE_ASSIGNMENT','Driver has multiple active trips',409);
+    ORDER BY CASE WHEN t.status='QUEUED' THEN 1 ELSE 0 END,
+      ${assignmentTable?.oid?'a.assigned_at,':''}t.dispatch_id,t.sequence_no,t.id LIMIT 2`,[driver.id])).rows;
+  if(rows.filter(t=>t.status!=='QUEUED').length>1)
+    fail('DRIVER_DOUBLE_ASSIGNMENT','Driver has multiple executing trips',409);
   if(!rows.length)return {data_status:'NO_ASSIGNMENT',trip:null};
   const trip=rows[0];
   const reports=(await db.query('SELECT item_id,status,reported_at FROM aimoc_execution_v1.driver_checklist_reports WHERE trip_id=$1 AND driver_id=$2',[trip.id,driver.id])).rows;

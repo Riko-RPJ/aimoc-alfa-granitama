@@ -31,6 +31,7 @@ import { legacyPagesForRole, defaultLegacyPage, legacyPageFromPath, legacyPathFo
 import { permissionsForRole, authorizeLegacyAction } from './contracts/role-permissions.js';
 import { AdminFinalPage } from './features/pages/admin-final/AdminFinalPage.jsx';
 import { CrossRoleUatPage } from './features/uat/CrossRoleUatPage.jsx';
+import { IntegratedWorkspace } from './features/integrated/IntegratedWorkspace.jsx';
 const CROSS_ROLE_UAT=import.meta.env.VITE_CROSS_ROLE_UAT==='1';
 import { Activity, ArrowDownLeft, ArrowDownToLine, ArrowRight, ArrowUpRight, BarChart3, Bell, Box, Camera, Check, CheckCircle2, ChevronDown, ChevronRight, CircleHelp, ClipboardCheck, ClipboardList, Clock3, Download, Factory, FileText, Filter, Layers3, LayoutDashboard, Loader2, LogOut, MapPin, Menu, Package, Plus, RefreshCw, Search, Send, Settings2, ShieldCheck, Ship, Truck, Upload, Users, Video, Wifi, WifiOff, X } from 'lucide-react';
 const legacyNavs = [['overview', 'Ringkasan operasi', LayoutDashboard], ['inventory', 'Stock inventory', Layers3], ['requests', 'Permintaan transfer', ClipboardList], ['dispatch', 'Dispatch & armada', Truck], ['jetty', 'Operasi jetty', Ship], ['master', 'Master data', Settings2], ['audit', 'Audit & NetSuite', FileText], ['access','Role & Access Control',ShieldCheck]];
@@ -75,7 +76,7 @@ const meta = localize({
   exceptions: ['EXCEPTION CONTROL', 'Exceptions & Recovery', 'Permasalahan dan tindak lanjut dengan sumber data yang dapat ditelusuri.'],
   integrations: ['SYSTEM INTEGRATIONS', 'Integrations & Audit', 'Event operasional, ERP outbox dan readiness integrasi.']
 });
-export default function App() {
+export function LegacyApp() {
   useLanguage();
   const truckCodeRoute=window.location.pathname==='/driver'||window.location.pathname==='/driver/tasks';
   const [user, setUser] = useState(null),
@@ -387,4 +388,18 @@ export default function App() {
     }} onClose={() => setModal(null)} />}
   {modal?.type === 'master' && <MasterModal {...sources} entity={modal.entity} record={modal.record} busy={busy} onClose={() => setModal(null)} onSubmit={(e, p) => act(`master.${e}.save`, p)} />}
  </div>;
+}
+
+// The normal application always uses the authenticated, shared operation store.
+// LegacyApp remains available to source reviewers, but never owns /driver/tasks.
+export default function App() {
+  useLanguage();
+  const [session,setSession]=useState(null);
+  const [booting,setBooting]=useState(true);
+  const [logoutError,setLogoutError]=useState('');
+  useEffect(()=>{let alive=true;api('/api/me').then(d=>{if(alive)setSession(d);}).catch(()=>{}).finally(()=>{if(alive)setBooting(false);});return()=>{alive=false;};},[]);
+  const logout=async()=>{try{await api('/api/logout',{method:'POST',headers:{'X-CSRF-Token':session?.csrfToken||''}});setSession(null);setLogoutError('');}catch(e){setLogoutError(e.message);}};
+  if(booting)return <div className="boot"><Brand/><Loader2 className="spin" size={24}/><p>{tr('Menghubungkan ruang operasi…')}</p></div>;
+  if(!session?.user)return <Login onLogin={d=>{setSession(d);setLogoutError('');}}/>;
+  return <IntegratedWorkspace key={session.user.id} user={session.user} csrf={session.csrfToken||''} logout={logout} logoutError={logoutError} onUnauthorized={()=>setSession(null)}/>;
 }

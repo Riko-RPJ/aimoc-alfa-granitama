@@ -1,5 +1,8 @@
 import {readFile} from 'node:fs/promises';
 import {createHash,randomUUID} from 'node:crypto';
+import {reconcilePendingWeighbridgeEventsInTransaction} from './phase4b-weighbridge.mjs';
+import {requireFleetQueueTurn} from './fleet-queue.mjs';
+import {refreshDispatchProgress} from './dispatch-progress.mjs';
 
 const fail=(code,message,status=409)=>{throw Object.assign(new Error(message),{status,code});};
 const digest=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -29,7 +32,11 @@ async function once(c,{actorId,idempotencyKey,command,payload},execute){
   return result;
 }
 
-/** Atomic per-dispatch serial start; never releases the predecessor truck. */
+/**
+ * Marine Option B retains its per-dispatch unload gate. Distinct trucks may
+ * proceed after predecessor unload; queued jobs sharing its truck/Driver must
+ * also wait for independently verified return, including across dispatches.
+ */
 export async function startMarineTrip(db,{actorId,idempotencyKey,tripId}){
   return db.transaction(async c=>once(c,{actorId,idempotencyKey,command:'startMarineTrip',payload:{tripId}},async()=>{
     // Lock trip and parent sequence gate in a stable order.
@@ -82,6 +89,7 @@ export async function startMarineTrip(db,{actorId,idempotencyKey,tripId}){
       if(Number(t.planned_quantity_t)>Number(vehicle.payload_limit_t))
         fail('TRUCK_PAYLOAD_EXCEEDED','Planned trip exceeds truck capacity');
     }
+    await requireFleetQueueTurn(c,t);
     const claimed=await row(c,'SELECT id FROM aimoc_execution_v1.resource_claims WHERE released_at IS NULL AND (truck_id=$1 OR driver_id=$2) LIMIT 1',[t.truck_id,t.driver_id]);
     if(claimed)fail('RESOURCE_BUSY','Truck or driver already claimed');
     await c.query('INSERT INTO aimoc_execution_v1.resource_claims(id,trip_id,truck_id,driver_id) VALUES ($1,$2,$3,$4)',
@@ -90,7 +98,9 @@ export async function startMarineTrip(db,{actorId,idempotencyKey,tripId}){
     await c.query('UPDATE aimoc_execution_v1.marine_gates SET active_trip_id=$1,version=version+1 WHERE dispatch_id=$2',[t.id,d.id]);
     if(d.status==='READY')await c.query(`UPDATE aimoc_execution_v1.dispatches SET status='ACTIVE' WHERE id=$1`,[d.id]);
     await c.query('INSERT INTO aimoc_execution_v1.operational_events(id,trip_id,event_type,actor_id) VALUES($1,$2,$3,$4)',[randomUUID(),t.id,'TRIP_START_AUTHORIZED',actorId]);
-    return {trip_id:t.id,status:'START_AUTHORIZED',dispatch_id:d.id,sequence_gate_occupied:true};
+    await reconcilePendingWeighbridgeEventsInTransaction(c,{tripId:t.id});
+    const current=await row(c,'SELECT status FROM aimoc_execution_v1.trips WHERE id=$1',[t.id]);
+    return {trip_id:t.id,status:current.status,dispatch_id:d.id,sequence_gate_occupied:true};
   }));
 }
 
@@ -122,7 +132,8 @@ export async function finalizeMarineUnload(db,{actorId,idempotencyKey,tripId}){
     await c.query(`UPDATE aimoc_execution_v1.trips SET status='UNLOADED_VERIFIED',unloaded_verified_at=now() WHERE id=$1`,[trip.id]);
     await c.query('UPDATE aimoc_execution_v1.marine_gates SET active_trip_id=NULL,last_released_sequence_no=$1,version=version+1 WHERE dispatch_id=$2',[trip.sequence_no,d.id]);
     await c.query('INSERT INTO aimoc_execution_v1.operational_events(id,trip_id,event_type,actor_id) VALUES($1,$2,$3,$4)',[randomUUID(),trip.id,'TRIP_UNLOADED_VERIFIED',actorId]);
-    return {trip_id:trip.id,status:'UNLOADED_VERIFIED',sequence_released:trip.sequence_no,truck_still_claimed:true};
+    const dispatchStatus=await refreshDispatchProgress(c,d.id);
+    return {trip_id:trip.id,status:'UNLOADED_VERIFIED',sequence_released:trip.sequence_no,truck_still_claimed:true,dispatch_status:dispatchStatus};
   }));
 }
 
@@ -150,7 +161,8 @@ export async function verifyMarineTripReturn(db,{actorId,idempotencyKey,tripId})
     await c.query('UPDATE aimoc_execution_v1.resource_claims SET released_at=now() WHERE id=$1',[claim.id]);
     await c.query(`UPDATE aimoc_execution_v1.trips SET status='RETURNED_AVAILABLE',returned_available_at=now() WHERE id=$1`,[trip.id]);
     await c.query('INSERT INTO aimoc_execution_v1.operational_events(id,trip_id,event_type,actor_id) VALUES($1,$2,$3,$4)',[randomUUID(),trip.id,'TRIP_RETURNED_AVAILABLE',actorId]);
-    return {trip_id:trip.id,status:'RETURNED_AVAILABLE',resource_claim_released:true};
+    const dispatchStatus=await refreshDispatchProgress(c,trip.dispatch_id);
+    return {trip_id:trip.id,status:'RETURNED_AVAILABLE',resource_claim_released:true,dispatch_status:dispatchStatus};
   }));
 }
 
@@ -189,6 +201,7 @@ export async function startLandTrip(db,{actorId,idempotencyKey,tripId}){
       if(Number(trip.planned_quantity_t)>Number(vehicle.payload_limit_t))
         fail('TRUCK_PAYLOAD_EXCEEDED','Planned cargo above payload');
     }
+    await requireFleetQueueTurn(c,trip);
     const claim=await row(c,`SELECT id FROM aimoc_execution_v1.resource_claims
       WHERE released_at IS NULL AND (truck_id=$1 OR driver_id=$2) LIMIT 1`,[trip.truck_id,trip.driver_id]);
     if(claim)fail('RESOURCE_BUSY','Truck or driver busy');
@@ -198,6 +211,8 @@ export async function startLandTrip(db,{actorId,idempotencyKey,tripId}){
     if(dispatch.status==='READY')await c.query(`UPDATE aimoc_execution_v1.dispatches SET status='ACTIVE' WHERE id=$1`,[dispatch.id]);
     await c.query('INSERT INTO aimoc_execution_v1.operational_events(id,trip_id,event_type,actor_id) VALUES($1,$2,$3,$4)',
       [randomUUID(),trip.id,'LAND_TRIP_START_AUTHORIZED',actorId]);
-    return {trip_id:trip.id,status:'START_AUTHORIZED',dispatch_id:dispatch.id,mode:'LAND'};
+    await reconcilePendingWeighbridgeEventsInTransaction(c,{tripId:trip.id});
+    const current=await row(c,'SELECT status FROM aimoc_execution_v1.trips WHERE id=$1',[trip.id]);
+    return {trip_id:trip.id,status:current.status,dispatch_id:dispatch.id,mode:'LAND'};
   }));
 }

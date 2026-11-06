@@ -141,12 +141,14 @@ test('Phase 4H: Admin creates actual staging dispatch, Stockpile accepts verifie
    assert.deepEqual(countRows,{dispatches:1,trips:1,assignments:1});
    const postCreateCatalog=await request('/api/v1/dispatch/planning-options',sessions.admin);
    assert.equal(postCreateCatalog.status,200);
-   assert.equal(postCreateCatalog.data.data.trucks.some(x=>x.truck_id==='truck-h'),false);
-   assert.equal(postCreateCatalog.data.data.drivers.some(x=>x.driver_id==='driver-h'),false);
+   assert.equal(postCreateCatalog.data.data.trucks.find(x=>x.truck_id==='truck-h').queued_trips,1);
+   assert.equal(postCreateCatalog.data.data.drivers.find(x=>x.driver_id==='driver-h').queued_trips,1);
    const doubleAssign={...dto,dispatch_id:'dispatch-retry',trips:[
     {...dto.trips[0],trip_id:'trip-retry',assignment_id:'assignment-retry',driver_id:'driver-h2'}]};
-   const denied=await command('admin','/api/v1/dispatches',doubleAssign,'create-conflict-truck-uat');
-   assert.equal(denied.status,409);assert.equal(denied.data.error,'TRUCK_ALREADY_ASSIGNED');
+   const queued=await command('admin','/api/v1/dispatches',doubleAssign,'create-future-truck-uat');
+   assert.equal(queued.status,200,JSON.stringify(queued.data));assert.equal(queued.data.data.status,'PLANNED');
+   assert.equal((await q("SELECT status FROM aimoc_execution_v1.trips WHERE id='trip-retry'")).rows[0].status,'QUEUED');
+   assert.equal((await q('SELECT count(*)::int AS n FROM aimoc_execution_v1.resource_claims')).rows[0].n,0);
 
   });
   await t.test('Admin explicitly binds a verified Driver before the first WIM event',async()=>{

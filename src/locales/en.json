@@ -1,4 +1,5 @@
 {
+  "0": "0",
   "Belum tersinkron": "Not synced yet",
   "Perlu pengukuran": "Measurement required",
   "Nonaktif": "Inactive",
@@ -581,7 +582,6 @@
   "Bahasa": "Language",
   "Pilih bahasa": "Select language",
   "Bahasa aplikasi": "Application language",
-  "0": "0",
   "0,00": "0.00",
   "A": "A",
   "AIMOC": "AIMOC",
@@ -603,5 +603,7 @@
   "t": "t",
   "{0} {1}": "{0} {1}",
   "{0} · {1}": "{0} · {1}",
-  "{0} → {1} · {2}": "{0} → {1} · {2}"
+  "{0} → {1} · {2}": "{0} → {1} · {2}",
+  "Pengemudi": "Driver",
+  "Sesuai penugasan ritase": "Assigned trips"
 }

@@ -5,10 +5,12 @@ CREATE TABLE IF NOT EXISTS aimoc_alfa_ops.operation (
 );
 CREATE TABLE IF NOT EXISTS aimoc_alfa_ops.users (
  id text PRIMARY KEY, username text NOT NULL UNIQUE, display_name text NOT NULL,
- password_hash text NOT NULL, role text NOT NULL CHECK(role IN ('admin','stock','jetty')),
+ password_hash text NOT NULL, role text NOT NULL CHECK(role IN ('admin','stock','jetty','driver')),
  crusher_ids text[] NOT NULL DEFAULT '{}', jetty_ids text[] NOT NULL DEFAULT '{}',
  active boolean NOT NULL DEFAULT true, created_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE aimoc_alfa_ops.users DROP CONSTRAINT IF EXISTS users_role_check;
+ALTER TABLE aimoc_alfa_ops.users ADD CONSTRAINT users_role_check CHECK(role IN ('admin','stock','jetty','driver'));
 CREATE TABLE IF NOT EXISTS aimoc_alfa_ops.sessions (
  token_hash text PRIMARY KEY, user_id text NOT NULL REFERENCES aimoc_alfa_ops.users(id),
  csrf_token text NOT NULL, expires_at timestamptz NOT NULL

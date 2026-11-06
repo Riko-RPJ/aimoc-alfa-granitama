@@ -34,7 +34,7 @@ export function authenticateWeighbridgeRequest({sourceSystem,timestamp,signature
 /** Apply signed, recorded event only when its state dependencies and source ordering hold. */
 async function validateTripAssignment(c,trip){
   const assignmentTable=await one(c,"SELECT to_regclass('aimoc_execution_v1.trip_driver_assignments') AS oid");
-  if(!assignmentTable?.oid)return;
+  if(!assignmentTable?.oid)return true;
   const assignment=await one(c,`SELECT a.assignment_id FROM aimoc_execution_v1.trip_driver_assignments a
     JOIN aimoc_execution_v1.driver_profiles p ON p.id=a.driver_id AND p.active=true
     JOIN aimoc_execution_v1.fleet_vehicle_specs v ON v.truck_id=a.truck_id AND v.active=true
@@ -45,14 +45,18 @@ async function validateTripAssignment(c,trip){
   if(identityTable?.oid){
     const binding=await one(c,`SELECT b.status,b.verified_at FROM aimoc_execution_v1.driver_identity_bindings b
       JOIN aimoc_execution_v1.driver_profiles p ON p.id=b.driver_id AND p.external_user_id=b.user_id
-      WHERE b.driver_id=$1 AND b.status='ACTIVE' AND b.verified_at IS NOT NULL AND p.active=true`,
+      WHERE b.driver_id=$1 AND p.active=true`,
       [trip.driver_id]);
-    if(!binding)fail('WEIGHBRIDGE_ASSIGNMENT_INVALID','Driver identity is not independently verified',403);
+    if(binding?.status==='PENDING')return false;
+    if(binding?.status!=='ACTIVE'||!binding.verified_at)
+      fail('WEIGHBRIDGE_ASSIGNMENT_INVALID','Driver identity is not independently verified',403);
   }
+  return true;
 }
 async function tryApply(c,e){
   const t=await one(c,'SELECT * FROM aimoc_execution_v1.trips WHERE id=$1 FOR UPDATE',[e.trip_id]);
   if(!t||t.truck_id!==e.truck_id)fail('WEIGHBRIDGE_TRIP_MISMATCH','Truck and trip correlation do not match');
+  if(!await validateTripAssignment(c,t))return false;
   if(e.event_type==='QR_SCANNED'){
     if(t.status!=='START_AUTHORIZED')return false;
     if(t.qr_event_id)fail('QR_ALREADY_BOUND','Trip already has a QR identity event');
@@ -112,13 +116,17 @@ export async function ingestSignedWeighbridgeEvent(db,{sourceSystem,timestamp,si
     if(!source?.active||source.authorized_weighbridge_id!==payload.weighbridge_id)
       fail('WEIGHBRIDGE_SOURCE_FORBIDDEN','Weighbridge source unauthorized',403);
     await verifyWeighbridgeSourceReadiness(c,{sourceSystem});
+    // Keep the same trip -> inbox lock order used by start/loading reconciliation.
+    const trip=await one(c,'SELECT * FROM aimoc_execution_v1.trips WHERE id=$1 FOR UPDATE',[payload.trip_id]);
+    if(!trip)fail('WEIGHBRIDGE_TRIP_MISMATCH','Unknown trip or assigned truck mismatch',422);
     const previous=await one(c,'SELECT * FROM aimoc_execution_v1.weighbridge_inbox WHERE source_system=$1 AND external_event_id=$2 FOR UPDATE',[sourceSystem,payload.external_event_id]);
     if(previous){
       if(previous.payload_sha256!==digest)fail('WEIGHBRIDGE_DUPLICATE_CONFLICT','Same external event id with different payload');
-      return {event_id:previous.id,status:previous.processing_status,replayed:true};
+      if(previous.processing_status==='PENDING')
+        await reconcilePendingWeighbridgeEventsInTransaction(c,{tripId:trip.id});
+      const current=await one(c,'SELECT processing_status,failure_code FROM aimoc_execution_v1.weighbridge_inbox WHERE id=$1',[previous.id]);
+      return {event_id:previous.id,status:current.processing_status,failure_code:current.failure_code,replayed:true};
     }
-    const trip=await one(c,'SELECT * FROM aimoc_execution_v1.trips WHERE id=$1 FOR UPDATE',[payload.trip_id]);
-    if(!trip)fail('WEIGHBRIDGE_TRIP_MISMATCH','Unknown trip or assigned truck mismatch',422);
     let rejectionCode=trip.truck_id!==payload.truck_id?'WEIGHBRIDGE_TRIP_MISMATCH':null;
     if(!rejectionCode){
       try{await validateTripAssignment(c,trip);}
@@ -151,6 +159,7 @@ export async function ingestSignedWeighbridgeEvent(db,{sourceSystem,timestamp,si
         SET processing_status='REJECTED',failure_code=$1 WHERE id=$2`,[failureCode,id]);
     }
     if(applied)await c.query(`UPDATE aimoc_execution_v1.weighbridge_inbox SET processing_status='ACCEPTED' WHERE id=$1`,[id]);
+    if(applied)await reconcilePendingWeighbridgeEventsInTransaction(c,{tripId:trip.id});
     await c.query(`INSERT INTO aimoc_execution_v1.integration_outbox(id,aggregate_id,event_type,payload)
       VALUES($1,$2,$3,$4::jsonb)`,[randomUUID(),trip.id,'WEIGHBRIDGE_EVENT_INGESTED',
         JSON.stringify({source_system:sourceSystem,external_event_id:payload.external_event_id,
@@ -162,13 +171,28 @@ export async function ingestSignedWeighbridgeEvent(db,{sourceSystem,timestamp,si
 
 /** A valid signed event may arrive early and remain PENDING; never invent missing events. */
 export async function reconcilePendingWeighbridgeEvents(db,{tripId}){
-  return db.transaction(async c=>{
+  return db.transaction(c=>reconcilePendingWeighbridgeEventsInTransaction(c,{tripId}));
+}
+
+/** Reuse the caller's transaction; opening another transaction deadlocks PGlite/pool locks. */
+export async function reconcilePendingWeighbridgeEventsInTransaction(c,{tripId}){
+    const inbox=await one(c,"SELECT to_regclass('aimoc_execution_v1.weighbridge_inbox') AS oid");
+    if(!inbox?.oid)return {trip_id:tripId,processed:0,rejected:0,remaining:0};
+    await c.query('SELECT id FROM aimoc_execution_v1.trips WHERE id=$1 FOR UPDATE',[tripId]);
     const pending=(await c.query(`SELECT * FROM aimoc_execution_v1.weighbridge_inbox
-      WHERE trip_id=$1 AND processing_status='PENDING' ORDER BY occurred_at,id FOR UPDATE`,[tripId])).rows;
+      WHERE trip_id=$1 AND processing_status='PENDING'
+      ORDER BY CASE event_type WHEN 'QR_SCANNED' THEN 1 WHEN 'TARE_RECORDED' THEN 2 ELSE 3 END,
+        occurred_at,id FOR UPDATE`,[tripId])).rows;
     let processed=0,rejected=0;
     for(const e of pending){
       let applied=false;
-      try{applied=await tryApply(c,e);}
+      try{
+        const source=await one(c,'SELECT * FROM aimoc_execution_v1.weighbridge_sources WHERE source_system=$1',[e.source_system]);
+        if(!source?.active||source.authorized_weighbridge_id!==e.weighbridge_id)
+          fail('WEIGHBRIDGE_SOURCE_FORBIDDEN','Stored event source is no longer authorized',403);
+        await verifyWeighbridgeSourceReadiness(c,{sourceSystem:e.source_system});
+        applied=await tryApply(c,e);
+      }
       catch(error){
         if(!Number.isInteger(error?.status)||error.status<400||error.status>=500)throw error;
         await c.query(`UPDATE aimoc_execution_v1.weighbridge_inbox
@@ -176,7 +200,10 @@ export async function reconcilePendingWeighbridgeEvents(db,{tripId}){
         rejected++;
       }
       if(applied){await c.query(`UPDATE aimoc_execution_v1.weighbridge_inbox SET processing_status='ACCEPTED' WHERE id=$1`,[e.id]);processed++;}
+      if(applied)await c.query(`INSERT INTO aimoc_execution_v1.integration_outbox(id,aggregate_id,event_type,payload)
+        VALUES($1,$2,'WEIGHBRIDGE_EVENT_RECONCILED',$3::jsonb)`,[randomUUID(),tripId,
+        JSON.stringify({event_id:e.id,source_system:e.source_system,external_event_id:e.external_event_id,
+          processing_status:'ACCEPTED'})]);
     }
     return {trip_id:tripId,processed,rejected,remaining:pending.length-processed-rejected};
-  });
 }

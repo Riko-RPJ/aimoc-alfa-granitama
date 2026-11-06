@@ -13,8 +13,10 @@ export function createDatabase(url=process.env.DATABASE_URL) {
 }
 export async function migrate(db,seed) {
   const sql=await readFile(new URL('./schema.sql',import.meta.url),'utf8');
-  for(const statement of sql.split(';').map(s=>s.trim()).filter(Boolean))await db.query(statement);
-  await db.query('INSERT INTO aimoc_alfa_ops.operation(id,document) VALUES (1,$1::jsonb) ON CONFLICT(id) DO NOTHING',[JSON.stringify(seed)]);
+  await db.transaction(async c=>{
+    for(const statement of sql.split(';').map(s=>s.trim()).filter(Boolean))await c.query(statement);
+    await c.query('INSERT INTO aimoc_alfa_ops.operation(id,document) VALUES (1,$1::jsonb) ON CONFLICT(id) DO NOTHING',[JSON.stringify(seed)]);
+  });
 }
 export async function createEmbeddedDatabase(path) {
   const {PGlite}=await import('@electric-sql/pglite'); const db=new PGlite(path);
