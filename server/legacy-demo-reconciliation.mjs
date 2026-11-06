@@ -39,7 +39,7 @@ function parameters(state, options, actor) {
 function auditBalances(state) {
   const stock = new Map(state.stockpiles.map(row => [row.id, 0]));
   const vessel = new Map(state.vessels.map(row => [row.id, 0]));
-  const preDeparture = new Set(['queued', 'start_pending', 'ready_to_load', 'loading', 'weighed']);
+  const preDeparture = new Set(['waiting_truck', 'queued', 'start_pending', 'ready_to_load', 'loading', 'weighed']);
   const notReceived = new Set([...preDeparture, 'in_transit', 'arrived']);
   const known = new Set([...notReceived, 'unloaded', 'returning', 'returned', 'cancelled']);
   for (const trip of state.trips) {

@@ -10,6 +10,8 @@ const open=x=>!['returned','cancelled'].includes(x.status);
 // In particular, legacy depart/return and the anonymous truck-code sidecar do
 // not carry the Driver, QR or weigh-event identities required by this workflow.
 export function guardLegacyIntegratedMutation(state,action,payload={}) {
+  if(action==='request.plan'&&state.automaticDispatchUpgrade?.version===1)
+    fail(409,'AUTOMATIC_DISPATCH_REQUIRED','Perencanaan lama telah dinonaktifkan. Gunakan dispatch otomatis dari aplikasi.');
   const linked=[...(state.trips||[]),...(state.requests||[]),...(state.dispatches||[])];
   if(linked.some(x=>isIntegrated(x)&&[payload.tripId,payload.requestId,payload.dispatchId].filter(Boolean).includes(x.id)))
     fail(409,'INTEGRATED_WORKFLOW_REQUIRED','Gunakan alur terpadu untuk transaksi ini.');

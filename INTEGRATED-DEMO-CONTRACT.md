@@ -95,21 +95,33 @@ not camera-measured volume.
 
 ```json
 {
-  "requestId": "req-example",
-  "assignments": [{"truckId": "truck-1", "driverUserId": "driver-user-id"}]
+  "requestId": "req-example"
 }
 ```
 
-`assignments` is optional. The default planner pairs active trucks with active
-driver users supplied by the server, preserving existing open bindings. It
-cannot manufacture a driver. Missing drivers produce `NO_DRIVERS`. Each chosen
-driver is bound to one truck until all its queued and active work returns.
-Default selection skips trucks with unfinished legacy work lacking an assigned
-Driver; explicit assignment to those trucks is rejected.
-Multiple queued trips per truck/driver are allowed. Planning reserves physical
-stock volume and, for MARINE, vessel tonnage including other reservations.
-It creates one multi-SKU dispatch with source allocations and capacity-limited
-trips. The maximum plan is 2,000 trips, with 20,000 total stored trips.
+There is no assignment form. `assignments` and explicit truck/Driver selectors
+are rejected with `MANUAL_ASSIGNMENT_NOT_ALLOWED`. The server chooses active,
+available trucks and active, available authenticated Drivers automatically.
+Any unfinished assigned trip occupies its truck and Driver, including a queued
+trip before start. A resource receives at most one unfinished assignment and
+can be allocated again only after the preceding return is independently
+verified. Missing free resources create waiting work instead of a manual task.
+
+Planning reserves the full source SKU stock and safe MARINE vessel tonnage.
+Multiple trucks and requests/dispatches may share a source stockpile as long as
+unreserved stock remains. Remaining source/SKU cargo is represented by a
+`waiting_truck` row with null `truckId` and `assignedDriverUserId`. It can
+represent several future physical loads. When resources become available the
+server splits that cargo using the selected truck's bed volume, payload and
+SKU density. The remainder retains its reservation and global FIFO priority;
+no inventory movement is posted by assignment or splitting.
+
+The allocator runs on planning and verified return; server hooks can also run
+it when Driver/truck availability is enabled. `queueSequence` preserves FIFO
+priority even when a split remainder receives a new display sequence/ID.
+The response includes `assignedTripIds`/`autoAssignedTripIds`, `waitingTripIds`
+and `autoDispatch` counters. Request and dispatch contexts carry these counters
+as well. The maximum plan remains 2,000 physical trips, with 20,000 stored rows.
 
 Every trip has `assignedDriverUserId`, `stockpileId`, `crusherId`, `skuId`,
 `truckId`, `requestId`, `dispatchId`, `tonnageT`, `volumeM3`, `sequence`, plus
@@ -125,6 +137,7 @@ The HTTP command identity remains required independently.
 
 | Action | Authorized actor | Required status | Result |
 | --- | --- | --- | --- |
+| None | No actor can execute waiting cargo | waiting_truck | Automatic allocation creates a capacity-limited queued task when resources are available |
 | `trip.qr` | Admin simulator | queued / start_pending / ready_to_load; no prior QR | Records synthetic QR; reconciles pending start |
 | `trip.tare` | Admin / source Stock | queued / start_pending; no prior tare | Positive synthetic tare PENDING; reconciles if start + QR exist |
 | `trip.start` | Assigned Driver only | queued; first unfinished task for both truck and driver | start_pending; becomes ready_to_load if QR + tare exist |
@@ -134,13 +147,13 @@ The HTTP command identity remains required independently.
 | `trip.arrive` | Admin / destination Stock (LAND) or assigned Jetty (MARINE) | in_transit | arrived |
 | `trip.receive` | Same destination operator | arrived; vessel must be loading for MARINE | unloaded; destination inventory or vessel cargo, receipt, ledger + outbox |
 | `trip.return_start` | Assigned Driver only | unloaded | returning |
-| `trip.return` | Admin / origin Stock | returning | returned; releases truck and driver |
+| `trip.return` | Admin / origin Stock | returning | returned; releases truck and driver, then automatically allocates the oldest waiting cargo |
 
 QR, tare and start may arrive in any order. Reconciliation occurs inside each
 relevant transaction; no separate manual replay/reconcile command is needed.
-`start_pending` reserves the truck and driver, preventing another task from
-starting while evidence is pending. Different trucks/drivers may work in
-parallel; later tasks for one truck/driver remain queued until return is
+`queued` already reserves the truck and driver, preventing a second task from
+being assigned to either resource. Different trucks/drivers may work in
+parallel; future cargo remains unassigned until return is
 independently verified. Drivers cannot receive their own load or verify their
 own return. Admins cannot impersonate the assigned Driver start/return-start.
 
