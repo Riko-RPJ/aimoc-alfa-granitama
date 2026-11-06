@@ -68,13 +68,27 @@ rewrite historical snapshots. Deactivation, mapping changes and removal of a
 transport mode are held while referenced work remains open. Referenced
 locations cannot be deleted.
 
-For LAND, Admin configures the location's `receivingCrusherId` to an existing
-receiving inventory area. The server derives `destinationId` from that mapping
-and rejects a conflicting client override. That area must have an active stockpile for each requested SKU.
+Location save accepts only `{id?, name, address, transportModes}`. Codes are
+server-generated, unique `SPL-000001` sequences allocated under the operation
+row lock, including historical codes; deletion never resets the sequence.
+New locations default active. Existing code, status and receiving mapping are
+preserved on edit; client overrides of these fields are rejected.
+
+For a new LAND location the system provisions a dedicated logical receiving
+inventory area, with zero-balance stockpiles for active SKUs. It is tagged
+`kind: RECEIVING_AREA`, `production: false`, `sourceEligible: false` and does
+not represent a physical crusher or dispatch source. Additional active SKUs
+are provisioned at zero on authorized LAND request writes only; GETs remain
+pure and inactive target rows are never reactivated automatically. Existing
+physical receiving mappings are retained. The server derives `destinationId`
+from the mapping and rejects a conflicting client override. That area must
+have an active stockpile for each requested SKU.
 An optional line `destinationStockpileId` selects a specific matching stockpile;
 otherwise the first matching stockpile by code is selected. Sources exclude
 the entire receiving area so a transfer cannot fulfil itself with its own
-receiving stock. This is a bounded demo location model; a production Marunda
+receiving stock. System-owned receiving rows cannot be removed separately;
+unused zero-balance areas are removed through their parent location only,
+with user-scope, balance and history guards. This is a bounded demo location model; a production Marunda
 inventory-area expansion remains separate work. MARINE still binds the operational
 delivery to the selected jetty and vessel; the stockpile location records its
 intended onward destination.

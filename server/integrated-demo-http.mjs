@@ -2,6 +2,7 @@ import {hash} from './auth.mjs';
 import {applyIntegratedAction,integratedView} from './integrated-demo-domain.mjs';
 import {requestDetail} from './request-detail.mjs';
 import {summarizeSkuStocks} from './sku-stock-summary.mjs';
+import {guardLocationOperatorReferences} from './location-guards.mjs';
 
 const fail=(status,code,message)=>{throw Object.assign(new Error(message),{status,code});};
 const validId=x=>typeof x==='string'&&/^[\w-]{1,100}$/.test(x);
@@ -100,6 +101,7 @@ export async function handleIntegratedDemo({db,path,method,req,actor,send,parseB
     if(body.expectedRevision!==undefined&&body.expectedRevision!==Number(row.revision))
       fail(409,'REVISION_CONFLICT','Data telah diperbarui operator lain. Muat ulang lalu coba lagi.');
     const state=structuredClone(row.document),drivers=await driversFor(c);
+    await guardLocationOperatorReferences(c,state,body.action,payload);
     const result=applyIntegratedAction(state,body.action,payload,actor,{drivers});
     await c.query('UPDATE aimoc_alfa_ops.operation SET document=$1::jsonb,revision=revision+1,updated_at=now() WHERE id=1',[JSON.stringify(state)]);
     await c.query('INSERT INTO aimoc_alfa_ops.actions(actor_id,request_id,payload_hash,result) VALUES($1,$2,$3,$4::jsonb)',[actor.id,body.requestId,payloadHash,JSON.stringify(result)]);

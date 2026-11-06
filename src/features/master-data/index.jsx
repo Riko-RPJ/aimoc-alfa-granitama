@@ -7,6 +7,7 @@ import { fmt, number, lookup, roleName } from '../shared/legacy-utils.js';
 import { Badge, Button, Field, Modal, Panel, DataTable } from '../../components/ui/index.jsx';
 import {CrusherLocationMaster} from './CrusherLocationMaster.jsx';
 import {StockpileLocationMaster} from './StockpileLocationMaster.jsx';
+import {isPhysicalCrusher} from '../../../shared/inventory-areas.mjs';
 
 export function MasterData({
   products,
@@ -27,11 +28,12 @@ export function MasterData({
   initialTab = 'product'
 }) {
   const language = useLanguage();
+  const physicalCrushers=crushers.filter(isPhysicalCrusher);
   const [tab, setTab] = useState(initialTab);
   useEffect(()=>setTab(initialTab),[initialTab]);
   const definitions = [['product', tr("Produk / SKU"), Package], ['crusher', tr("Crusher"), Factory], ['crusher-location','Crusher Locations',MapPin], ['stockpile-location',language==='en'?'Stockpile locations':'Lokasi stockpile',MapPin], ['stockpile', tr("Stockpile"), Layers3], ['truck', tr("Armada"), Truck], ['jetty', tr("Jetty"), MapPin], ['vessel', tr("Kapal"), Ship], ['user', tr("Akun pengguna"), Users]];
   const actions = record => <div className="row-actions"><button className="text-btn" onClick={() => setModal({type:'master',entity:tab,record})}>{tr("Edit ")}<ChevronRight size={14}/></button><button className="text-btn danger" onClick={() => window.confirm(tr("Hapus master {0}? Tindakan ini tidak dapat dibatalkan.",record.code||record.name)) && onDelete(tab,record.id)}><Trash2 size={13}/>{tr("Hapus")}</button></div>;
-  return <><div className="tabs">{definitions.map(([id, label, Icon]) => <button key={id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}><Icon size={16} />{label}</button>)}</div>{tab === 'stockpile-location' ? <StockpileLocationMaster {...{stockpileLocations,crushers,locationBusy,locationError,onLocationSave,onLocationDelete}}/> : tab === 'crusher-location' ? <CrusherLocationMaster crushers={crushers} csrf={csrf} notify={notify}/> : tab === 'user' ? <UserManagement {...{
+  return <><div className="tabs">{definitions.map(([id, label, Icon]) => <button key={id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}><Icon size={16} />{label}</button>)}</div>{tab === 'stockpile-location' ? <StockpileLocationMaster {...{stockpileLocations,crushers,locationBusy,locationError,onLocationSave,onLocationDelete}}/> : tab === 'crusher-location' ? <CrusherLocationMaster crushers={physicalCrushers} csrf={csrf} notify={notify}/> : tab === 'user' ? <UserManagement {...{
       crushers,
       jetties,
       csrf,
@@ -41,8 +43,8 @@ export function MasterData({
       entity: tab
     })}>{tr("Tambah ")}{definitions.find(x => x[0] === tab)?.[1]}</Button>}>
  {tab === 'product' && <DataTable headers={[tr("Kode SKU"), tr("Nama produk"), tr("Ukuran batu"), tr("Berat jenis"), tr("Status"), tr("Aksi")]}>{products.map(p => <tr key={p.id}><td><b>{p.code}</b></td><td>{p.name}</td><td>{p.sizeMm}</td><td>{fmt(p.densityTPerM3, 2)}{tr(" t/m³")}</td><td><Badge tone={p.active !== false ? 'green' : 'neutral'}>{p.active !== false ? tr("Aktif") : tr("Nonaktif")}</Badge></td><td>{actions(p)}</td></tr>)}</DataTable>}
- {tab === 'crusher' && <DataTable headers={[tr("Kode crusher"), tr("Nama"), tr("SKU terpetakan"), tr("Lokasi stockpile"), tr("Status"), tr("Aksi")]}>{crushers.map(c => <tr key={c.id}><td><b>{c.code}</b></td><td>{c.name}</td><td>{new Set(stockpiles.filter(s => s.crusherId === c.id).map(s => s.skuId)).size}{tr(" / 6 SKU")}</td><td>{stockpiles.filter(s => s.crusherId === c.id).length}{tr(" stockpile")}</td><td><Badge tone={c.active !== false ? 'green' : 'neutral'}>{c.active !== false ? tr("Aktif") : tr("Nonaktif")}</Badge></td><td>{actions(c)}</td></tr>)}</DataTable>}
- {tab === 'stockpile' && <DataTable headers={[tr("Kode stockpile"), tr("Crusher"), tr("Produk / SKU"), tr("Stok fisik"), tr("Reservasi"), tr("Aksi")]}>{stockpiles.map(s => <tr key={s.id}><td><b>{s.code}</b></td><td>{lookup(crushers, s.crusherId)?.name}</td><td>{lookup(products, s.skuId)?.code}</td><td>{fmt(s.onHandM3, 2)}{tr(" m³")}</td><td>{fmt(s.reservedM3, 2)}{tr(" m³")}</td><td>{actions(s)}</td></tr>)}</DataTable>}
+ {tab === 'crusher' && <DataTable headers={[tr("Kode crusher"), tr("Nama"), tr("SKU terpetakan"), tr("Lokasi stockpile"), tr("Status"), tr("Aksi")]}>{physicalCrushers.map(c => <tr key={c.id}><td><b>{c.code}</b></td><td>{c.name}</td><td>{new Set(stockpiles.filter(s => s.crusherId === c.id).map(s => s.skuId)).size}{tr(" / 6 SKU")}</td><td>{stockpiles.filter(s => s.crusherId === c.id).length}{tr(" stockpile")}</td><td><Badge tone={c.active !== false ? 'green' : 'neutral'}>{c.active !== false ? tr("Aktif") : tr("Nonaktif")}</Badge></td><td>{actions(c)}</td></tr>)}</DataTable>}
+ {tab === 'stockpile' && <DataTable headers={[tr("Kode stockpile"), tr("Area stok"), tr("Produk / SKU"), tr("Stok fisik"), tr("Reservasi"), tr("Aksi")]}>{stockpiles.map(s => <tr key={s.id}><td><b>{s.code}</b></td><td>{lookup(crushers, s.crusherId)?.name}</td><td>{lookup(products, s.skuId)?.code}</td><td>{fmt(s.onHandM3, 2)}{tr(" m³")}</td><td>{fmt(s.reservedM3, 2)}{tr(" m³")}</td><td>{actions(s)}</td></tr>)}</DataTable>}
  {tab === 'truck' && <DataTable headers={[tr("Kode truk"), tr("Nomor polisi"), tr("Volume bak"), tr("Batas payload"), tr("Siklus rencana"), tr("Aksi")]}>{trucks.map(t => <tr key={t.id}><td><b>{t.code}</b></td><td>{t.plate}</td><td>{fmt(t.bedM3)}{tr(" m³")}</td><td>{fmt(t.payloadLimitT)}{tr(" ton")}</td><td>{fmt(t.cycleMinutes)}{tr(" menit")}</td><td>{actions(t)}</td></tr>)}</DataTable>}
  {tab === 'jetty' && <DataTable headers={[tr("Kode jetty"), tr("Nama"), tr("Kapal terdaftar"), tr("Status"), tr("Aksi")]}>{jetties.map(j => <tr key={j.id}><td><b>{j.code}</b></td><td>{j.name}</td><td>{vessels.filter(v => v.jettyId === j.id).length}{tr(" kapal")}</td><td><Badge tone={j.active !== false ? 'green' : 'neutral'}>{j.active !== false ? tr("Aktif") : tr("Nonaktif")}</Badge></td><td>{actions(j)}</td></tr>)}</DataTable>}
  {tab === 'vessel' && <DataTable headers={[tr("Kapal"), tr("Jetty"), tr("Batas kargo aman"), tr("Muat / reservasi"), tr("Status"), tr("Aksi")]}>{vessels.map(v => <tr key={v.id}><td><b>{v.name}</b><small>{v.code}</small></td><td>{lookup(jetties, v.jettyId)?.name}</td><td>{fmt(v.payloadLimitT)}{tr(" ton")}</td><td>{fmt(v.loadedT)} / {fmt(v.reservedT)}{tr(" ton")}</td><td><Badge status={v.status}>{v.status === 'loading' ? tr("Sedang loading") : statusText[v.status] || v.status}</Badge></td><td>{actions(v)}</td></tr>)}</DataTable>}
@@ -131,7 +133,7 @@ export function MasterModal({
             min: 0.01,
             max: 5,
             step: 0.01
-          })}</>}{entity === 'stockpile' && <><Field label={tr("Crusher sumber")}><select required value={form.crusherId} onChange={e => set("crusherId", e.target.value)}>{crushers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></Field><Field label={tr("Produk / SKU")}><select required value={form.skuId} onChange={e => set("skuId", e.target.value)}>{products.map(p => <option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}</select></Field>{common("onHandM3", tr("Stok fisik awal / tercatat (m³)"), 'number', {
+          })}</>}{entity === 'stockpile' && <><Field label={tr("Area stok")}><select required value={form.crusherId} onChange={e => set("crusherId", e.target.value)}>{crushers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></Field><Field label={tr("Produk / SKU")}><select required value={form.skuId} onChange={e => set("skuId", e.target.value)}>{products.map(p => <option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}</select></Field>{common("onHandM3", tr("Stok fisik awal / tercatat (m³)"), 'number', {
             min: 0,
             max: 10000000,
             step: 0.01,
@@ -221,7 +223,7 @@ export function UserManagement({
               role: e.target.value,
               crusherIds: [],
               jettyIds: []
-            })}><option value="stock">{tr("Operator stockpile")}</option><option value="jetty">{tr("Operator jetty")}</option><option value="admin">{tr("Administrator")}</option><option value="driver">{tr("Pengemudi")}</option></select></Field></div>{['stock','jetty'].includes(form.role) && <fieldset className="scope-checks"><legend>{tr("Cakupan ")}{form.role === 'stock' ? 'crusher' : 'jetty'}</legend>{(form.role === 'stock' ? crushers : jetties).map(row => {
+            })}><option value="stock">{tr("Operator stockpile")}</option><option value="jetty">{tr("Operator jetty")}</option><option value="admin">{tr("Administrator")}</option><option value="driver">{tr("Pengemudi")}</option></select></Field></div>{['stock','jetty'].includes(form.role) && <fieldset className="scope-checks"><legend>{tr("Cakupan ")}{form.role === 'stock' ? tr('Area stok') : 'jetty'}</legend>{(form.role === 'stock' ? crushers : jetties).map(row => {
             const key = form.role === 'stock' ? "crusherIds" : "jettyIds";
             return <label key={row.id}><input type="checkbox" checked={form[key].includes(row.id)} onChange={e => setForm({
                 ...form,
