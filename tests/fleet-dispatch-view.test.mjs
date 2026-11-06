@@ -130,3 +130,148 @@ test('actual role-scoped domain context keeps global assigned fleet and restrict
   assert.equal(ownGroups.groups.flatMap(group => group.trips).length, own.trips.length);
   assert.ok(ownGroups.groups.flatMap(group => group.trips).every(trip => trip.assignedDriverUserId === drivers[0].id));
 });
+
+test('canonical allocation overrides malformed visible execution hints and prestart without a start time', () => {
+  const visible = [
+    {id: 'prestart', truckId: 'truck-1', status: 'start_pending', qrScannedAt: '2026-11-07T01:00:00Z', weighingEvents: [{type: 'TARE', status: 'PENDING'}]},
+    {id: 'stale-execution', truckId: 'truck-2', status: 'loading', startedAt: '2026-11-07T00:00:00Z'},
+    {id: 'stale-assignment', truckId: 'truck-3', status: 'queued'}
+  ];
+  const fleet = [
+    {...trucks[0], status: 'allocated', activeTripId: null, nextTripId: 'prestart', queuedTrips: 1, serialTripsRemaining: 1, dispatchId: 'd1', dispatchIds: ['d1'], bindingStatus: 'DISPATCH'},
+    {...trucks[1], status: 'allocated', activeTripId: null, nextTripId: null, queuedTrips: 1, serialTripsRemaining: 1, dispatchId: 'd2', dispatchIds: ['d2'], bindingStatus: 'DISPATCH'},
+    {...trucks[2], status: 'available', activeTripId: null, nextTripId: null, queuedTrips: 0, serialTripsRemaining: 0, dispatchId: null, dispatchIds: [], bindingStatus: 'NONE'}
+  ];
+  const result = buildFleetView({trucks: trucks.slice(0, 3), fleet, trips: visible});
+  assert.deepEqual(result.rows.map(row => row.operationalStatus), ['allocated', 'allocated', 'available']);
+  assert.deepEqual(result.summary, {available: 1, allocated: 2, total: 3, unavailable: 0});
+  assert.equal(result.operationalSummary.busy, 0);
+  assert.equal(result.operationalSummary.allocated, 2);
+  assert.equal(result.rows[0].activeTripId, null);
+  assert.equal(result.rows[0].nextTripId, 'prestart');
+  assert.equal(result.rows[0].nextTrip.id, 'prestart');
+  assert.equal(result.rows[0].bindingStatus, 'DISPATCH');
+  assert.equal(result.rows[2].assignedTripId, null, 'Stale visible rows must not recreate a released canonical assignment');
+});
+
+test('a hidden current trip never becomes a visible queued tail and canonical queue counts remain global', () => {
+  const queued = {id: 'visible-tail', truckId: 'truck-1', status: 'queued', dispatchId: 'visible-dispatch'};
+  const result = buildFleetView({trucks: [trucks[0]], fleet: [{
+    ...trucks[0], status: 'busy', activeTripId: null, nextTripId: queued.id,
+    queuedTrips: 2, serialTripsRemaining: 3, dispatchId: 'visible-dispatch',
+    dispatchIds: ['visible-dispatch'], bindingStatus: 'DISPATCH'
+  }], trips: [queued]});
+  const row = result.rows[0];
+  assert.equal(row.operationalStatus, 'busy');
+  assert.equal(row.activeTripId, null);
+  assert.equal(row.activeTrip, null);
+  assert.equal(row.assignedTrip, null, 'A scoped-out executing assignment must stay unidentified');
+  assert.equal(row.assignedTripId, null);
+  assert.equal(row.nextTripId, queued.id);
+  assert.equal(row.nextTrip.id, queued.id);
+  assert.equal(row.queuedTrips, 2);
+  assert.equal(row.serialTripsRemaining, 3);
+  assert.deepEqual(row.dispatchIds, ['visible-dispatch']);
+  assert.deepEqual(result.summary, {available: 0, allocated: 1, total: 1, unavailable: 0});
+  assert.equal(result.operationalSummary.busy, 1);
+});
+
+test('unknown or missing authoritative fleet status fails closed instead of advertising a truck as available', () => {
+  for (const fleet of [
+    [{...trucks[0], status: 'unexpected-status', activeTripId: null, nextTripId: null, queuedTrips: 0}],
+    [{...trucks[0], activeTripId: null, nextTripId: null, queuedTrips: 0}],
+    []
+  ]) {
+    const result = buildFleetView({trucks: [trucks[0]], fleet, trips: []});
+    assert.equal(result.rows[0].operationalStatus, 'unknown');
+    assert.equal(result.rows[0].assignmentStatus, 'unavailable');
+    assert.equal(result.summary.available, 0);
+    assert.equal(result.operationalSummary.unknown, 1);
+    assert.equal(paginateFleet(result.rows, {filter: 'available'}).total, 0);
+  }
+  assert.equal(buildFleetView({trucks: [trucks[0]], trips: []}).summary.available, 1, 'Legacy-only callers retain their explicit compatibility path');
+});
+
+test('actual three-trip serial queue stays allocated between own returns and releases only after its final trip', () => {
+  const state = createSeed(), admin = {id: 'serial-view-admin', role: 'admin'};
+  const driver = {id: 'serial-view-driver', role: 'driver', username: 'serial-driver', active: true}, options = {drivers: [driver]};
+  state.products.find(product => product.id === 'split-12').densityTPerM3 = 2;
+  for (const pile of state.stockpiles.filter(pile => pile.skuId === 'split-12')) pile.onHandM3 = pile.crusherId === 'crusher-1' ? 200 : 0;
+  state.trucks = [{...state.trucks[0], bedM3: 30, payloadLimitT: 40}];
+  const action = (name, payload, actor = admin) => applyIntegratedAction(state, name, payload, actor, options);
+  const request = quantity => action('request.create', {transferMode: 'MARINE', destinationLocationId: 'stockpile-location-crusher-2', jettyId: 'jetty-1', vesselId: 'vessel-1', lines: [{skuId: 'split-12', quantity, unit: 't'}]}).entityId;
+  const view = (actor = admin) => buildFleetView(integratedView(state, actor, options));
+  const requestId = request(120); action('request.plan', {requestId});
+  const serial = state.trips.filter(trip => trip.requestId === requestId).sort((a, b) => a.sequence - b.sequence);
+  assert.equal(serial.length, 3);
+  assert.ok(serial.every(trip => trip.truckId === state.trucks[0].id && trip.assignedDriverUserId === driver.id));
+  const waitingRequestId = request(20); action('request.plan', {requestId: waitingRequestId});
+  const waits = () => state.trips.filter(trip => trip.requestId === waitingRequestId);
+  assert.ok(waits().every(trip => trip.status === 'waiting_truck' && trip.truckId === null));
+  let fleet = view(), row = fleet.rows[0];
+  assert.equal(row.operationalStatus, 'allocated');
+  assert.equal(row.serialTripsRemaining, 3);
+  assert.equal(row.queuedTrips, 3);
+  assert.equal(row.activeTripId, null);
+  assert.equal(row.nextTripId, serial[0].id);
+  assert.equal(row.dispatchId, serial[0].dispatchId);
+  const stock = {id: 'serial-origin-stock', role: 'stock', crusherIds: [serial[0].crusherId]};
+  const jetty = {id: 'serial-receiving-jetty', role: 'jetty', jettyIds: ['jetty-1']};
+  action('trip.qr', {tripId: serial[1].id});
+  action('trip.tare', {tripId: serial[1].id, weightT: 20}, stock);
+  assert.equal(view().rows[0].operationalStatus, 'allocated', 'Future QR/tare proof alone cannot count as execution');
+  assert.throws(() => action('trip.start', {tripId: serial[1].id}, driver), error => error.code === 'QUEUE_ORDER');
+  const finish = (trip, remainingAfter) => {
+    const current = state.trips.find(item => item.id === trip.id);
+    if (!current.qrScannedAt) action('trip.qr', {tripId: trip.id});
+    if (!current.weighingEvents.some(event => event.type === 'TARE')) action('trip.tare', {tripId: trip.id, weightT: 20}, stock);
+    assert.equal(view().rows[0].operationalStatus, 'allocated');
+    action('trip.start', {tripId: trip.id}, driver);
+    const busy = view().rows[0];
+    assert.equal(busy.operationalStatus, 'busy');
+    assert.equal(busy.activeTripId, trip.id);
+    assert.equal(busy.activeTrip.id, trip.id);
+    assert.equal(busy.serialTripsRemaining, remainingAfter + 1);
+    const hidden = view({id: 'serial-unrelated-jetty', role: 'jetty', jettyIds: ['jetty-2']}).rows[0];
+    assert.equal(hidden.operationalStatus, 'busy');
+    assert.equal(hidden.activeTripId, null); assert.equal(hidden.nextTripId, null);
+    assert.equal(hidden.assignedTrip, null); assert.deepEqual(hidden.dispatchIds, []);
+    action('trip.loading', {tripId: trip.id}, stock);
+    action('trip.gross', {tripId: trip.id, weightT: 20 + current.tonnageT}, stock);
+    action('trip.depart', {tripId: trip.id}, stock);
+    action('trip.arrive', {tripId: trip.id}, jetty);
+    action('trip.receive', {tripId: trip.id}, jetty);
+    action('trip.return_start', {tripId: trip.id}, driver);
+    assert.equal(view().rows[0].operationalStatus, 'busy', 'Receiving alone never releases the assignment');
+    action('trip.return', {tripId: trip.id}, stock);
+  };
+  for (const [index, trip] of serial.entries()) {
+    finish(trip, serial.length - index - 1);
+    row = view().rows[0];
+    assert.equal(row.operationalStatus, 'allocated');
+    assert.equal(row.activeTripId, null);
+    if (index < serial.length - 1) {
+      assert.equal(row.serialTripsRemaining, serial.length - index - 1);
+      assert.equal(row.nextTripId, serial[index + 1].id);
+      assert.equal(row.dispatchId, serial[0].dispatchId);
+      assert.ok(waits().every(waiting => waiting.status === 'waiting_truck' && waiting.truckId === null));
+    } else {
+      assert.equal(state.requests.find(item => item.id === requestId).status, 'completed');
+      assert.equal(waits().length, 1);
+      assert.equal(waits()[0].status, 'queued');
+      assert.equal(row.dispatchId, waits()[0].dispatchId, 'The next dispatch receives the truck only after its own previous queue ends');
+      assert.equal(row.nextTripId, waits()[0].id);
+      assert.equal(row.serialTripsRemaining, 1);
+    }
+  }
+  finish(waits()[0], 0);
+  fleet = view(); row = fleet.rows[0];
+  assert.deepEqual(fleet.summary, {available: 1, allocated: 0, total: 1, unavailable: 0});
+  assert.equal(row.operationalStatus, 'available');
+  assert.equal(row.bindingStatus, 'NONE');
+  assert.equal(row.serialTripsRemaining, 0); assert.equal(row.queuedTrips, 0);
+  assert.equal(row.activeTripId, null); assert.equal(row.nextTripId, null);
+  assert.equal(row.assignedTrip, null); assert.deepEqual(row.dispatchIds, []);
+  assert.equal(state.vessels.find(vessel => vessel.id === 'vessel-1').loadedT, 140);
+  assert.equal(state.stockpiles.find(pile => pile.id === 'stock-1-3').reservedM3, 0);
+});
