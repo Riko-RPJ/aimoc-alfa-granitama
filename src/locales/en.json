@@ -105,6 +105,7 @@
   "Pengiriman baru dihitung diterima setelah operator jetty mengonfirmasi bongkar. Status antre dan perjalanan belum menambah muatan kapal.": "A delivery is counted as received only after the jetty operator confirms unloading. Queued and in-transit trips do not increase vessel cargo.",
   "STOK FISIK TERCATAT": "RECORDED PHYSICAL STOCK",
   "{0} stockpile · {1} crusher terdaftar": "{0} stockpiles · {1} registered crushers",
+  "{0} stockpile · {1} area stok terdaftar": "{0} stockpiles · {1} registered inventory areas",
   "STOK DIRESERVASI": "RESERVED STOCK",
   "Terikat ke dispatch yang belum dimuat": "Committed to dispatches not yet loaded",
   "MENUNGGU VALIDASI": "AWAITING VALIDATION",

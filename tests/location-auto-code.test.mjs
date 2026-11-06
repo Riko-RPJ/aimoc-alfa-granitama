@@ -65,7 +65,8 @@ test('new automatic LAND receiving completes real demo custody to its own invent
  const created=act('master.stockpileLocation.save',input('End-to-end receiver',['LAND'])),loc=s.stockpileLocations.find(x=>x.id===created.locationId);
  const target=s.stockpiles.find(x=>x.crusherId===loc.receivingCrusherId&&x.skuId==='split-12'),beforeCargo=s.vessels.map(v=>[v.loadedT,v.reservedT]);
  const request=act('request.create',{transferMode:'LAND',destinationLocationId:loc.id,lines:[{skuId:'split-12',quantity:9,unit:'t'}]});
- const plan=act('request.plan',{requestId:request.requestId,assignments:[{truckId:'truck-1',driverUserId:driver.id}]}),tripId=plan.tripIds[0];
+ const plan=act('request.plan',{requestId:request.requestId}),tripId=plan.tripIds[0];
+ const assigned=s.trips.find(x=>x.id===tripId);assert.equal(assigned.assignmentMode,'AUTOMATIC');assert.equal(assigned.assignedDriverUserId,driver.id);assert.equal(assigned.status,'queued');assert.ok(s.trucks.some(x=>x.id===assigned.truckId&&x.active));
  act('trip.qr',{tripId});act('trip.tare',{tripId,weightT:20});act('trip.start',{tripId},driver);act('trip.loading',{tripId});act('trip.gross',{tripId,weightT:29});act('trip.depart',{tripId});
  const receiver={id:'synthetic-receiver',role:'stock',crusherIds:[loc.receivingCrusherId]};act('trip.arrive',{tripId},receiver);act('trip.receive',{tripId},receiver);act('trip.return_start',{tripId},driver);act('trip.return',{tripId});
  assert.equal(s.stockpiles.find(x=>x.id===target.id).onHandM3,6);assert.deepEqual(s.vessels.map(v=>[v.loadedT,v.reservedT]),beforeCargo);

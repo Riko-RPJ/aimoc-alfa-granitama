@@ -101,8 +101,14 @@ test('new LAND location automatically receives real trip inventory into its own 
  }
  await db.query('UPDATE aimoc_alfa_ops.users SET active=true WHERE id=$1',[receiver.body.user.id]);
  const req=await ok('request.create',{transferMode:'LAND',destinationLocationId:loc.id,lines:[{skuId:'split-12',quantity:10,unit:'t'}]});
- const plan=await ok('request.plan',{requestId:req.result.requestId,assignments:[{truckId:'truck-1',driverUserId:driverId}]});
+ const beforeDelete=await state();
+ const requestedTarget=req.state.requests.find(x=>x.id===req.result.requestId).lines[0].destinationStockpileId;
+ const protectedDelete=await call('/api/action','POST',{action:'master.stockpile.delete',payload:{id:requestedTarget},requestId:randomUUID()});
+ assert.equal(protectedDelete.status,409,JSON.stringify(protectedDelete.body));assert.equal(protectedDelete.body.error,'SYSTEM_MANAGED_STOCKPILE');
+ assert.deepEqual(await state(),beforeDelete,'Deleting a generated zero-balance target cannot strand an unplanned LAND request');
+ const plan=await ok('request.plan',{requestId:req.result.requestId});
  const trip=plan.state.trips.find(x=>x.requestId===req.result.requestId);assert.equal(trip.destinationCrusherId,area.id);
+ assert.equal(trip.assignmentMode,'AUTOMATIC');assert.equal(trip.assignedDriverUserId,driverId);assert.equal(trip.status,'queued');
  const source=trip.crusherId==='crusher-1'?'stock1':'stock2';
  await ok('trip.qr',{tripId:trip.id});await ok('trip.start',{tripId:trip.id},'qa-driver');await ok('trip.tare',{tripId:trip.id,weightT:20},source);
  await ok('trip.loading',{tripId:trip.id},source);await ok('trip.gross',{tripId:trip.id,weightT:30},source);await ok('trip.depart',{tripId:trip.id},source);
@@ -118,7 +124,7 @@ test('new LAND location automatically receives real trip inventory into its own 
 });
 
 test('later SKU is provisioned only by a valid LAND write without inventing source stock or retaining failed drafts',async t=>{
- const {call,ok,action,state,driverId}=await fixture(t);
+ const {call,ok,action,state}=await fixture(t);
  const created=await ok('master.stockpileLocation.save',location('Future SKU destination',['LAND']));
  const loc=created.state.stockpileLocations.find(x=>x.id===created.result.locationId);
  const saveSku=async(code)=>{
@@ -142,7 +148,7 @@ test('later SKU is provisioned only by a valid LAND write without inventing sour
  const totals=summary.body.items.find(x=>x.skuId===skuId);
  assert.equal(totals.physicalM3,0);assert.equal(totals.sourceEligibleAvailableM3,0);
  assert.deepEqual(await state(),afterRequest,'Reading totals never provisions further receiving rows');
- const rejectedPlan=await action('request.plan',{requestId:requested.result.requestId,assignments:[{truckId:'truck-1',driverUserId:driverId}]});
+ const rejectedPlan=await action('request.plan',{requestId:requested.result.requestId});
  assert.equal(rejectedPlan.status,409,JSON.stringify(rejectedPlan.body));assert.equal(rejectedPlan.body.error,'INSUFFICIENT_STOCK');
  assert.deepEqual(await state(),afterRequest,'An empty receiver cannot fabricate dispatch source inventory');
 });
