@@ -1,6 +1,7 @@
 import { randomUUID, createHash } from 'node:crypto';
 import {isDispatchSourceArea} from '../shared/inventory-areas.mjs';
 import {summarizeDriverDailyTrips} from './driver-daily-summary.mjs';
+import {applyDriverScan,driverScanProgress,DRIVER_TWO_SCAN_MODE} from './driver-two-scan.mjs';
 import { applyAction, DomainError } from './domain.mjs';
 import {ensureStockpileLocations, stockpileLocationsForRead, applyStockpileLocationAction, resolveStockpileDestination, ensureReceivingStockpilesForRequest} from './stockpile-locations.mjs';
 import {scheduleAutomaticDispatch,automaticDispatchSummary,truckAvailability,assertSerialDispatchClaims,refreshAutomaticDispatchProgress as aggregate} from './automatic-dispatch.mjs';
@@ -199,6 +200,7 @@ function moveTrip(s, action, p, actor, options) {
   else if (['start', 'return_start'].includes(action)) driver(actor, t);
   else if (['arrive', 'receive'].includes(action)) destinationScope();
   else sourceScope();
+  if(t.driverScanMode===DRIVER_TWO_SCAN_MODE)fail('Ritase ini menggunakan dua scan Driver. Lanjutkan melalui konfirmasi scan Driver.','DRIVER_TWO_SCAN_REQUIRED',409);
   if(t.status==='waiting_truck')fail('Muatan menunggu truk dan pengemudi tersedia; belum dapat dieksekusi.','WAITING_FOR_TRUCK',409);
   const eventId = p.externalEventId ?? p.eventId;
   const normalized = {...p}; delete normalized.externalEventId; delete normalized.eventId;
@@ -298,8 +300,10 @@ export function applyIntegratedAction(state, action, payload, actor, options = {
   if (['master.stockpileLocation.save', 'master.stockpileLocation.delete'].includes(action)) result = applyStockpileLocationAction(draft, action, payload, actor);
   else if (action === 'request.create') result = createRequest(draft, payload, actor);
   else if (action === 'request.plan') result = planRequest(draft, payload, actor, options);
+  else if (action === 'trip.driver_scan') result = applyDriverScan(draft,payload,actor,options);
   else if (typeof action === 'string' && action.startsWith('trip.')) result = moveTrip(draft, action.slice(5), payload, actor, options);
   else fail('Tindakan demo tidak didukung.', 'ACTION_NOT_FOUND', 404);
+  if(action==='trip.driver_scan'&&result.replayed===true)return result;
   draft.updatedAt = timestamp();
   Object.assign(state, draft);
   return result;
@@ -348,7 +352,9 @@ export function integratedView(state, actor, options = {}) {
     if (destinationAllowed && t.status === 'arrived' && (t.transferMode === 'LAND' || state.vessels.find(v => v.id === t.vesselId)?.status === 'loading')) allowed.push('trip.receive');
     if (assigned && t.status === 'unloaded') allowed.push('trip.return_start');
     if (sourceAllowed && t.status === 'returning') allowed.push('trip.return');
-    result.allowedActions = allowed;
+    result.driverScan=driverScanProgress(state,t,actor,options);
+    result.displayStatus=t.driverScanMode===DRIVER_TWO_SCAN_MODE&&t.status==='returned'?'completed':t.status;
+    result.allowedActions = t.driverScanMode===DRIVER_TWO_SCAN_MODE?(result.driverScan.canScan?['trip.driver_scan']:[]):[...allowed,...(result.driverScan.canScan?['trip.driver_scan']:[])];
     return result;
   });
   const tripIds = new Set(view.trips.map(t => t.id));
