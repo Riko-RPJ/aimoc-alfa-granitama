@@ -42,9 +42,9 @@ MARINE creation accepts existing request fields:
 ```json
 {
   "transferMode": "MARINE",
+  "destinationLocationId": "stockpile-location-crusher-2",
   "jettyId": "jetty-1",
   "vesselId": "vessel-1",
-  "destination": "Stockpile Marunda",
   "lines": [{"skuId": "split-12", "quantity": 80, "unit": "t"}]
 }
 ```
@@ -54,19 +54,38 @@ LAND creation:
 ```json
 {
   "transferMode": "LAND",
-  "destinationId": "crusher-2",
-  "destination": "Receiving stockpile",
+  "destinationLocationId": "stockpile-location-crusher-2",
   "lines": [{"skuId": "split-12", "quantity": 80, "unit": "t"}]
 }
 ```
 
-LAND `destinationId` is an **existing active crusher/location ID** in the demo
-master. The destination must have an active stockpile for each requested SKU.
+New LAND and MARINE requests require `destinationLocationId` from Admin's
+**Stockpile Locations** master. The location must be active and support the
+selected transport mode. Its name/code/address and receiving-area mapping are
+snapshotted onto the request, dispatch, trip and ERP outbox; free-text
+`destination` cannot override that identity. Later display-name edits do not
+rewrite historical snapshots. Deactivation, mapping changes and removal of a
+transport mode are held while referenced work remains open. Referenced
+locations cannot be deleted.
+
+For LAND, Admin configures the location's `receivingCrusherId` to an existing
+receiving inventory area. The server derives `destinationId` from that mapping
+and rejects a conflicting client override. That area must have an active stockpile for each requested SKU.
 An optional line `destinationStockpileId` selects a specific matching stockpile;
 otherwise the first matching stockpile by code is selected. Sources exclude
-the entire destination crusher so a transfer cannot fulfil itself with its own
+the entire receiving area so a transfer cannot fulfil itself with its own
 receiving stock. This is a bounded demo location model; a production Marunda
-location/master migration remains separate work.
+inventory-area expansion remains separate work. MARINE still binds the operational
+delivery to the selected jetty and vessel; the stockpile location records its
+intended onward destination.
+
+Existing requests without a master ID retain their original destination text
+on read. During planning an old LAND request can resolve a unique matching
+receiving area, or Admin must explicitly choose a location if ambiguous. An
+old MARINE request is not assigned a city/location by guessing. Existing
+documents without the new master field project deterministic locations from
+their actual crusher/inventory-area masters without mutating a GET. An explicit
+empty master stays empty. No geographic city-to-crusher mapping is inferred.
 
 Each request has one to six unique active SKUs. Units are `t` or `m3`; density is
 captured from the SKU master. Derived cubic metres are a density conversion,

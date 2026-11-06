@@ -5,9 +5,11 @@ import {projectV1Read,isV1UnimplementedMutation} from './v1/read-model.mjs';
 import {permissionsForRole,authorizeLegacyAction,TARGET_ADMIN_CAPABILITIES} from './role-permissions.mjs';
 import {listCrusherLoadingPoints,saveCrusherLoadingPoint} from './crusher-location-master.mjs';
 import {handleIntegratedDemo,guardLegacyIntegratedMutation} from './integrated-demo-http.mjs';
+import {resolveStockpileDestination,guardReceivingCrusherMutation} from './stockpile-locations.mjs';
 
 const fail=(status,code,message)=>{throw Object.assign(new Error(message),{status,code});};
 const validId=x=>typeof x==='string'&&/^[\w-]{1,100}$/.test(x);
+const stockpileDestinationFields=record=>Object.fromEntries(['destinationLocationId','destinationLocationCode','destinationLocationName','destinationLocationSnapshot'].filter(key=>Object.hasOwn(record,key)).map(key=>[key,structuredClone(record[key])]));
 const parseBody=async req=>{
   if(req.body&&typeof req.body==='object'&&!Buffer.isBuffer(req.body)) {if(Buffer.byteLength(JSON.stringify(req.body))>3000000)fail(413,'PAYLOAD_TOO_LARGE','Berkas terlalu besar.');return req.body;}
   if(typeof req.body==='string'){if(Buffer.byteLength(req.body)>3000000)fail(413,'PAYLOAD_TOO_LARGE','Berkas terlalu besar.');try{return JSON.parse(req.body);}catch{fail(400,'INVALID_JSON','Format permintaan tidak valid.');}}
@@ -305,7 +307,20 @@ export function createHandler(db,{secure=false}={}) {
           }
           const state=structuredClone(locked.document);
           guardLegacyIntegratedMutation(state,body.action,payload);
-          const actionResult=applyAction(state,body.action,payload,actor)||{message:'Tersimpan'};
+          guardReceivingCrusherMutation(state,body.action,payload);
+          const destination=body.action==='request.create'?resolveStockpileDestination(state,payload,{allowLegacy:!Object.hasOwn(state,'stockpileLocations')}):null;
+          const legacyPayload=destination?{transferMode:payload.transferMode||'MARINE',destination:destination.destination,lines:payload.lines,...(payload.transferMode==='LAND'?{destinationId:destination.destinationId}:{jettyId:payload.jettyId,vesselId:payload.vesselId})}:payload;
+          const oldOutboxCount=state.erpOutbox.length;
+          const actionResult=applyAction(state,body.action,legacyPayload,actor)||{message:'Tersimpan'};
+          if(destination)Object.assign(state.requests.find(x=>x.id===actionResult.entityId),destination);
+          if(body.action==='request.plan'){
+            const request=state.requests.find(x=>x.id===payload.requestId);
+            if(request?.destinationLocationId)for(const record of [...state.dispatches,...state.trips].filter(x=>x.requestId===request.id))Object.assign(record,stockpileDestinationFields(request));
+          }
+          if(body.action.startsWith('trip.')){
+            const trip=state.trips.find(x=>x.id===payload.tripId);
+            if(trip?.destinationLocationId)for(const item of state.erpOutbox.slice(oldOutboxCount))Object.assign(item.payload,stockpileDestinationFields(trip));
+          }
           await c.query('UPDATE aimoc_alfa_ops.operation SET document=$1::jsonb,revision=revision+1,updated_at=now() WHERE id=1',[JSON.stringify(state)]);
           await c.query('INSERT INTO aimoc_alfa_ops.actions(actor_id,request_id,payload_hash,result) VALUES($1,$2,$3,$4::jsonb)',[actor.id,body.requestId,payloadHash,JSON.stringify(actionResult)]);
           return {...await view(c),result:actionResult};

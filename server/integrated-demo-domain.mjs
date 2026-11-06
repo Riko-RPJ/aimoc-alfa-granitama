@@ -1,5 +1,6 @@
 import { randomUUID, createHash } from 'node:crypto';
 import { applyAction, DomainError } from './domain.mjs';
+import {ensureStockpileLocations, stockpileLocationsForRead, applyStockpileLocationAction, resolveStockpileDestination} from './stockpile-locations.mjs';
 
 // This is an explicitly synthetic workflow over the existing operation document.
 // It does not write normalized production evidence or manufacture verification.
@@ -29,6 +30,7 @@ const list = x => Array.isArray(x) ? x : [];
 const stable = value => Array.isArray(value) ? value.map(stable) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(k => [k, stable(value[k])])) : value;
 const fingerprint = value => createHash('sha256').update(JSON.stringify(stable(value))).digest('hex');
 const nextCode = (prefix, rows) => `${prefix}-${String(rows.length + 1).padStart(5, '0')}`;
+const locationFields = record => Object.fromEntries(['destination', 'destinationLocationId', 'destinationLocationCode', 'destinationLocationName', 'destinationLocationSnapshot', 'legacyDestinationUnmapped'].filter(key => record[key] !== undefined).map(key => [key, structuredClone(record[key])]));
 
 function event(s, actor, action, entityId, extra = {}) {
   const result = {id: id('evt'), at: timestamp(), actorId: actor.id, actorName: actor.name || actor.username || actor.id, role: actor.role, type: action, entityId, source: SOURCE, synthetic: true, ...extra};
@@ -41,7 +43,7 @@ function ledger(s, actor, type, stockpileId, volumeM3, t, tonnageT = 0) {
 }
 
 function erp(s, type, t) {
-  s.erpOutbox.push({id: id('erp'), createdAt: timestamp(), type, entityId: t.id, status: 'awaiting_configuration', system: 'oracle_netsuite', source: SOURCE, synthetic: true, payload: {tripId: t.id, tripCode: t.code, requestId: t.requestId, dispatchId: t.dispatchId, skuId: t.skuId, volumeM3: t.volumeM3, tonnageT: t.tonnageT, sourceStockpileId: t.stockpileId, destinationStockpileId: t.destinationStockpileId || null, jettyId: t.jettyId, vesselId: t.vesselId, receiptCode: t.receiptCode || null, quantitySource: SOURCE}});
+  s.erpOutbox.push({id: id('erp'), createdAt: timestamp(), type, entityId: t.id, status: 'awaiting_configuration', system: 'oracle_netsuite', source: SOURCE, synthetic: true, payload: {tripId: t.id, tripCode: t.code, requestId: t.requestId, dispatchId: t.dispatchId, skuId: t.skuId, volumeM3: t.volumeM3, tonnageT: t.tonnageT, sourceStockpileId: t.stockpileId, destinationStockpileId: t.destinationStockpileId || null, jettyId: t.jettyId, vesselId: t.vesselId, receiptCode: t.receiptCode || null, quantitySource: SOURCE, ...locationFields(t)}});
 }
 
 function aggregate(s) {
@@ -78,9 +80,11 @@ function destination(s, request, skuId, requestedStockpileId) {
 }
 
 function createRequest(s, p, actor) {
+  const resolved = resolveStockpileDestination(s, p);
   if ((p.transferMode || 'MARINE') === 'MARINE') {
-    const result = applyAction(s, 'request.create', p, actor);
+    const result = applyAction(s, 'request.create', {...p, destination: resolved.destination}, actor);
     const request = row(s, 'requests', result.entityId);
+    Object.assign(request, resolved);
     request.source = SOURCE;
     request.synthetic = true;
     request.quantitySource = 'REQUESTED_DEMO';
@@ -92,7 +96,7 @@ function createRequest(s, p, actor) {
   }
   admin(actor);
   if (p.transferMode !== 'LAND') fail('Mode harus LAND atau MARINE.', 'TRANSFER_MODE_INVALID');
-  const request = {id: id('req'), code: nextCode('TR', s.requests), transferMode: 'LAND', destinationId: text(p.destinationId, 'Lokasi tujuan'), destination: text(p.destination, 'Nama tujuan'), jettyId: null, vesselId: null, lines: [], status: 'requested', requestedBy: actor.id, createdAt: timestamp(), deliveredM3: 0, deliveredT: 0, source: SOURCE, synthetic: true, quantitySource: 'REQUESTED_DEMO'};
+  const request = {id: id('req'), code: nextCode('TR', s.requests), transferMode: 'LAND', ...resolved, jettyId: null, vesselId: null, lines: [], status: 'requested', requestedBy: actor.id, createdAt: timestamp(), deliveredM3: 0, deliveredT: 0, source: SOURCE, synthetic: true, quantitySource: 'REQUESTED_DEMO'};
   if (!Array.isArray(p.lines) || !p.lines.length || p.lines.length > 6) fail('Permintaan harus berisi 1–6 SKU.');
   const seen = new Set();
   request.lines = p.lines.map(line => {
@@ -119,6 +123,10 @@ function planRequest(s, p, actor, options) {
   const request = row(s, 'requests', p.requestId);
   if (!integrated(request)) fail('Permintaan ini bukan workflow demo terintegrasi.', 'SOURCE_MISMATCH', 409);
   if (request.status !== 'requested') fail('Permintaan sudah direncanakan.', 'ALREADY_PLANNED', 409);
+  if (p.destinationLocationId !== undefined && request.destinationLocationId && p.destinationLocationId !== request.destinationLocationId) fail('Lokasi tujuan permintaan tidak boleh diganti melalui perencanaan.', 'DESTINATION_MISMATCH', 409);
+  const resolved = resolveStockpileDestination(s, {...request, ...(p.destinationLocationId === undefined ? {} : {destinationLocationId: p.destinationLocationId})}, {allowLegacy: true});
+  if (!request.destinationLocationSnapshot) Object.assign(request, resolved);
+  else if (request.transferMode === 'LAND' && (request.destinationLocationSnapshot.receivingCrusherId !== resolved.destinationId || request.destinationId !== resolved.destinationId)) fail('Snapshot area penerimaan tidak sesuai lokasi tujuan.', 'DESTINATION_MISMATCH', 409);
   const drivers = driverCatalog(options.drivers);
   const trucks = s.trucks.filter(t => t.active);
   if (!trucks.length) fail('Tidak ada truk aktif.', 'NO_TRUCKS', 409);
@@ -153,7 +161,7 @@ function planRequest(s, p, actor, options) {
   const requestedT = round(request.lines.reduce((sum, line) => sum + line.tonnageT, 0));
   if (vessel && (vessel.active === false || vessel.status === 'closed' || vessel.jettyId !== request.jettyId || row(s, 'jetties', request.jettyId).active === false)) fail('Tujuan kapal/jetty tidak tersedia.', 'INACTIVE_DESTINATION', 409);
   if (vessel && requestedT > vessel.payloadLimitT - vessel.loadedT - vessel.reservedT + EPS) fail('Sisa kapasitas kapal termasuk reservasi tidak cukup.', 'VESSEL_CAPACITY', 409);
-  const dispatch = {id: id('dsp'), code: nextCode('DSP', s.dispatches), requestId: request.id, transferMode: request.transferMode, source: SOURCE, synthetic: true, destinationId: request.destinationId || null, jettyId: request.jettyId, vesselId: request.vesselId, allocations: [], tripIds: [], status: 'planned', createdAt: timestamp(), completedTrips: 0, deliveredM3: 0, deliveredT: 0};
+  const dispatch = {id: id('dsp'), code: nextCode('DSP', s.dispatches), requestId: request.id, transferMode: request.transferMode, source: SOURCE, synthetic: true, ...locationFields(request), destinationId: request.destinationId || null, jettyId: request.jettyId, vesselId: request.vesselId, allocations: [], tripIds: [], status: 'planned', createdAt: timestamp(), completedTrips: 0, deliveredM3: 0, deliveredT: 0};
   let sequence = s.trips.reduce((max, t) => Math.max(max, t.sequence || 0), 0);
   const load = new Map(assignments.map(a => [a.truck.id, s.trips.filter(t => t.truckId === a.truck.id && open(t)).length]));
   for (const line of request.lines) {
@@ -180,7 +188,7 @@ function planRequest(s, p, actor, options) {
         if (volumeM3 <= 0) fail('Kuantitas terlalu kecil untuk presisi volume demo.', 'QUANTITY_PRECISION', 409);
         if (round(stock.reservedM3 + volumeM3) > stock.onHandM3) fail('Pembulatan reservasi melebihi stok tersedia.', 'INSUFFICIENT_STOCK', 409);
         const readyMinutes = load.get(truck.id) * truck.cycleMinutes;
-        const trip = {id: id('trip'), code: nextCode('RIT', s.trips), source: SOURCE, synthetic: true, quantitySource: 'PLANNED_DEMO', requestId: request.id, dispatchId: dispatch.id, transferMode: request.transferMode, stockpileId: stock.id, crusherId: stock.crusherId, skuId: line.skuId, destinationId: request.destinationId || null, destinationStockpileId: target?.id || null, destinationCrusherId: target?.crusherId || null, truckId: truck.id, assignedDriverUserId: assignment.driver.id, jettyId: request.jettyId, vesselId: request.vesselId, densityTPerM3: line.densityTPerM3, volumeM3, tonnageT, status: 'queued', sequence: ++sequence, createdAt: timestamp(), estimatedStartAt: new Date(Date.now() + readyMinutes * 60000).toISOString(), estimatedReturnAt: new Date(Date.now() + (readyMinutes + truck.cycleMinutes) * 60000).toISOString(), weighingEvents: []};
+        const trip = {id: id('trip'), code: nextCode('RIT', s.trips), source: SOURCE, synthetic: true, quantitySource: 'PLANNED_DEMO', requestId: request.id, dispatchId: dispatch.id, transferMode: request.transferMode, ...locationFields(request), stockpileId: stock.id, crusherId: stock.crusherId, skuId: line.skuId, destinationId: request.destinationId || null, destinationStockpileId: target?.id || null, destinationCrusherId: target?.crusherId || null, truckId: truck.id, assignedDriverUserId: assignment.driver.id, jettyId: request.jettyId, vesselId: request.vesselId, densityTPerM3: line.densityTPerM3, volumeM3, tonnageT, status: 'queued', sequence: ++sequence, createdAt: timestamp(), estimatedStartAt: new Date(Date.now() + readyMinutes * 60000).toISOString(), estimatedReturnAt: new Date(Date.now() + (readyMinutes + truck.cycleMinutes) * 60000).toISOString(), weighingEvents: []};
         s.trips.push(trip);
         dispatch.tripIds.push(trip.id);
         stock.reservedM3 = round(stock.reservedM3 + volumeM3);
@@ -332,8 +340,10 @@ export function applyIntegratedAction(state, action, payload, actor, options = {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) fail('Payload wajib berupa object.');
   const draft = structuredClone(state);
   for (const key of ['products', 'crushers', 'stockpiles', 'trucks', 'jetties', 'vessels', 'requests', 'dispatches', 'trips', 'inventoryLedger', 'events', 'erpOutbox']) if (!Array.isArray(draft[key])) fail('Dokumen operasional tidak lengkap.', 'STATE_INVALID', 409);
+  ensureStockpileLocations(draft);
   let result;
-  if (action === 'request.create') result = createRequest(draft, payload, actor);
+  if (['master.stockpileLocation.save', 'master.stockpileLocation.delete'].includes(action)) result = applyStockpileLocationAction(draft, action, payload, actor);
+  else if (action === 'request.create') result = createRequest(draft, payload, actor);
   else if (action === 'request.plan') result = planRequest(draft, payload, actor, options);
   else if (typeof action === 'string' && action.startsWith('trip.')) result = moveTrip(draft, action.slice(5), payload, actor, options);
   else fail('Tindakan demo tidak didukung.', 'ACTION_NOT_FOUND', 404);
@@ -346,6 +356,7 @@ export function applyIntegratedAction(state, action, payload, actor, options = {
 export function integratedView(state, actor, options = {}) {
   if (!actor?.id || !['admin', 'stock', 'jetty', 'driver'].includes(actor.role)) fail('Akun tidak berwenang.', 'FORBIDDEN', 403);
   const view = structuredClone(state);
+  view.stockpileLocations = stockpileLocationsForRead(state);
   const allTrips = state.trips;
   const fleet = state.trucks.map(truck => {
     const trips = allTrips.filter(t => t.truckId === truck.id && open(t));

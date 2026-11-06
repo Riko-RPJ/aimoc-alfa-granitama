@@ -114,7 +114,7 @@ test('unknown status, recorded weights, movement timestamps, QR, ledger or ERP i
 
 test('cumulative reservation audit protects unrelated integrated jobs and rejects balance drift', () => {
   const {state, options} = fixture();
-  const integratedRequest = applyIntegratedAction(state, 'request.create', {transferMode: 'MARINE', jettyId: 'jetty-2', vesselId: 'vessel-3', destination: 'Unrelated integrated reservation', lines: [{skuId: 'split-23', quantity: 10, unit: 't'}]}, admin, {drivers: [driver]});
+  const integratedRequest = applyIntegratedAction(state, 'request.create', {transferMode: 'MARINE', destinationLocationId: 'stockpile-location-crusher-2', jettyId: 'jetty-2', vesselId: 'vessel-3', destination: 'Unrelated integrated reservation', lines: [{skuId: 'split-23', quantity: 10, unit: 't'}]}, admin, {drivers: [driver]});
   // All fleet is reserved by the legacy batch; a dedicated synthetic truck
   // demonstrates another owner's reservation that cancellation must not release.
   state.trucks.push({id: 'dedicated-truck', code: 'DT-999', active: true, bedM3: 30, payloadLimitT: 40, cycleMinutes: 30});
