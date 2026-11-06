@@ -56,8 +56,12 @@ async function fixture(t,{drivers=2}={}){
  };
  const unique=(state)=>{
   const active=assigned(state);
-  assert.equal(new Set(active.map(t=>t.truckId)).size,active.length,'A truck must not have two unfinished assignments');
-  assert.equal(new Set(active.map(t=>t.assignedDriverUserId)).size,active.length,'A Driver must not have two unfinished assignments');
+  for(const field of ['truckId','assignedDriverUserId'])for(const value of new Set(active.map(t=>t[field]))){
+   const tasks=active.filter(t=>t[field]===value);
+   assert.equal(new Set(tasks.map(t=>t.dispatchId)).size,1,'A truck/Driver may claim only one unfinished dispatch');
+   assert.equal(new Set(tasks.map(t=>field==='truckId'?t.assignedDriverUserId:t.truckId)).size,1,'Serial dispatch retains one truck/Driver pair');
+   assert.ok(tasks.filter(t=>t.startedAt||!['queued','waiting_truck'].includes(t.status)).length<=1,'A resource cannot execute simultaneous trips');
+  }
   for(const trip of active){
    const truck=state.trucks.find(x=>x.id===trip.truckId);
    assert.ok(trip.assignedDriverUserId,'Assigned task has an automatically selected Driver');
@@ -67,10 +71,10 @@ async function fixture(t,{drivers=2}={}){
   }
   for(const trip of waiting(state)){assert.equal(trip.truckId,null);assert.equal(trip.assignedDriverUserId,null);}
  };
- const finish=async(trip,{beforeReturn}={})=>{
+ const finish=async(trip,{beforeReturn,returnKey}={})=>{
   const driver=Object.keys(actors).find(name=>actors[name].id===trip.assignedDriverUserId);assert.ok(driver);
-  await ok('trip.qr',{tripId:trip.id});
-  await ok('trip.tare',{tripId:trip.id,weightT:5},'stock2');
+  if(!trip.qrScannedAt)await ok('trip.qr',{tripId:trip.id});
+  if(!trip.weighingEvents?.some(e=>e.type==='TARE'))await ok('trip.tare',{tripId:trip.id,weightT:5},'stock2');
   await ok('trip.start',{tripId:trip.id},driver);
   await ok('trip.loading',{tripId:trip.id},'stock2');
   await ok('trip.gross',{tripId:trip.id,weightT:5+trip.tonnageT},'stock2');
@@ -79,7 +83,7 @@ async function fixture(t,{drivers=2}={}){
   await ok('trip.receive',{tripId:trip.id},'jetty1');
   await ok('trip.return_start',{tripId:trip.id},driver);
   if(beforeReturn)await beforeReturn((await context()).state);
-  return ok('trip.return',{tripId:trip.id},'stock2');
+  return ok('trip.return',{tripId:trip.id},'stock2',returnKey?{requestId:returnKey}:{});
  };
  return {db,actors,call,action,ok,context,request,unique,finish,addDriver};
 }
@@ -88,10 +92,12 @@ test('automatic HTTP planning shares SKU stock across dispatches and reuses uniq
  const {actors,action,ok,context,request,unique,finish}=await fixture(t);
  const first=await request(60);
  const a=await ok('request.plan',{requestId:first});
- unique(a.state);assert.equal(assigned(a.state).length,2);assert.deepEqual(assigned(a.state).map(x=>x.tonnageT).sort((x,y)=>x-y),[10,20]);
- assert.ok(waiting(a.state).length>0);assert.ok(close(amount(a.state.trips,'tonnageT'),60));
+ unique(a.state);assert.equal(new Set(assigned(a.state).map(x=>x.truckId)).size,2);assert.equal(assigned(a.state).length,a.state.trips.length);
+ assert.equal(waiting(a.state).length,0);assert.ok(close(amount(a.state.trips,'tonnageT'),60));
+ assert.ok(a.state.trucks.every(x=>x.status==='allocated'));
  const second=await request(40),b=await ok('request.plan',{requestId:second});
- unique(b.state);assert.equal(assigned(b.state).length,2);assert.ok(waiting(b.state).some(x=>x.requestId===second));
+ unique(b.state);assert.equal(assigned(b.state).length,assigned(a.state).length);assert.ok(waiting(b.state).some(x=>x.requestId===second));
+ assert.ok(assigned(b.state).every(x=>x.requestId===first),'The second dispatch cannot claim either allocated truck');
  assert.equal(b.state.stockpiles.find(x=>x.id==='stock-2-3').reservedM3,50);assert.equal(b.state.vessels[0].reservedT,100);
  assert.equal(new Set(b.state.trips.map(x=>x.stockpileId)).size,1,'Multiple trucks/dispatches can use one stockpile');
  assert.equal(b.state.trips[0].stockpileId,'stock-2-3');
@@ -105,13 +111,15 @@ test('automatic HTTP planning shares SKU stock across dispatches and reuses uniq
   assert.ok(completed<20,'Scheduler must make progress without a new Admin plan');
   const task=assigned(current).sort((x,y)=>x.sequence-y.sequence)[0];assert.ok(task);
   const beforeWaiting=waiting(current).sort((x,y)=>(x.queueSequence??x.sequence)-(y.queueSequence??y.sequence)||x.sequence-y.sequence)[0];
+  const ownRemaining=assigned(current).filter(x=>x.id!==task.id&&x.truckId===task.truckId&&x.dispatchId===task.dispatchId);
   const oldAssigned=assigned(current).map(x=>x.id).sort();
   const outcome=await finish(task,{beforeReturn:async state=>{
    unique(state);assert.deepEqual(assigned(state).map(x=>x.id).sort(),oldAssigned,'Receipt and return-start cannot release the truck');
   }});
   current=(await context()).state;unique(current);completed++;
   const replacement=assigned(current).find(x=>x.truckId===task.truckId);
-  if(beforeWaiting){assert.ok(replacement,'Verified return automatically allocates pending work');assert.equal(replacement.requestId,beforeWaiting.requestId,'Oldest pending request gets the freed resource');}
+  if(ownRemaining.length){assert.ok(replacement);assert.equal(replacement.dispatchId,task.dispatchId,'Own serial queue keeps its dispatch claim');}
+  else if(beforeWaiting){assert.ok(replacement,'Own final verified return automatically allocates pending work');assert.equal(replacement.requestId,beforeWaiting.requestId,'Oldest pending request gets the freed resource');}
   assert.equal(outcome.result.status,'returned');
  }
  assert.ok(completed>=4);assert.ok(current.requests.every(x=>x.status==='completed'));assert.ok(current.dispatches.every(x=>x.status==='completed'));
@@ -133,10 +141,52 @@ test('automatic HTTP scheduling rejects manual assignments and prevents concurre
  const next=await context(),pending=next.state.requests.find(x=>x.status==='requested'),command={requestId:randomUUID(),expectedRevision:next.revision};
  const replay=await Promise.all([action('request.plan',{requestId:pending.id},'admin',command),action('request.plan',{requestId:pending.id},'admin',command)]);
  assert.ok(replay.every(x=>x.status===200));assert.equal(replay.filter(x=>x.body.replayed).length,1);
- const all=(await context()).state;unique(all);assert.equal(assigned(all).length,2);assert.equal(all.stockpiles.find(x=>x.id==='stock-2-3').reservedM3,50);assert.equal(all.vessels[0].reservedT,100);
+ const all=(await context()).state;unique(all);assert.equal(new Set(assigned(all).map(t=>t.truckId)).size,2);assert.equal(new Set(assigned(all).map(t=>t.dispatchId)).size,1,'Concurrent plans never share a resource across dispatch claims');assert.equal(all.stockpiles.find(x=>x.id==='stock-2-3').reservedM3,50);assert.equal(all.vessels[0].reservedT,100);
  const tooMuch=await request(101),before=(await db.query('SELECT document,revision FROM aimoc_alfa_ops.operation WHERE id=1')).rows[0];
  const rejected=await action('request.plan',{requestId:tooMuch});assert.equal(rejected.status,409);assert.equal(rejected.body.error,'INSUFFICIENT_STOCK');
  assert.deepEqual((await db.query('SELECT document,revision FROM aimoc_alfa_ops.operation WHERE id=1')).rows[0],before);
+});
+
+test('HTTP serial claim remains allocated across pre-scans and intermediate returns, then hands off once at own final return',async t=>{
+ const {actors,action,ok,context,request,unique,finish}=await fixture(t,{drivers:1});
+ const a=await request(50),planned=await ok('request.plan',{requestId:a});
+ const serial=planned.state.trips.filter(t=>t.requestId===a).sort((x,y)=>x.sequence-y.sequence);
+ assert.deepEqual(serial.map(t=>t.tonnageT),[20,20,10]);assert.equal(new Set(serial.map(t=>t.truckId)).size,1);
+ const truckId=serial[0].truckId,dispatchId=serial[0].dispatchId;
+ assert.equal(planned.state.trucks.find(t=>t.id===truckId).status,'allocated');
+ assert.equal(planned.state.trucks.find(t=>t.id===truckId).serialTripsRemaining,3);
+ const b=await request(10),blocked=await ok('request.plan',{requestId:b});
+ assert.ok(blocked.state.trips.filter(t=>t.requestId===b).every(t=>t.status==='waiting_truck'&&!t.truckId&&!t.assignedDriverUserId));
+ const reserved=amount(blocked.state.stockpiles,'reservedM3');assert.equal(reserved,30);assert.equal(blocked.state.vessels[0].reservedT,60);
+ const early=await action('trip.start',{tripId:serial[1].id},'driver1');assert.equal(early.status,409);assert.equal(early.body.error,'QUEUE_ORDER');
+ await ok('trip.qr',{tripId:serial[1].id});await ok('trip.tare',{tripId:serial[1].id,weightT:5},'stock2');
+ const prescanned=(await context()).state;unique(prescanned);
+ const allocated=prescanned.trucks.find(t=>t.id===truckId);assert.equal(allocated.status,'allocated');assert.equal(allocated.activeTripId,null);assert.equal(allocated.dispatchId,dispatchId);
+ assert.equal(amount(prescanned.stockpiles,'reservedM3'),reserved);assert.equal(prescanned.inventoryLedger.length,0);assert.equal(prescanned.erpOutbox.length,0);
+ const hidden=(await context('jetty2')).state.trucks.find(t=>t.id===truckId);
+ assert.equal(hidden.status,'allocated');assert.equal(hidden.dispatchId,null);assert.deepEqual(hidden.dispatchIds,[]);assert.equal(hidden.nextTripId,null);
+ assert.ok((await context('driver1')).state.trips.every(t=>t.assignedDriverUserId===actors.driver1.id&&t.requestId===a));
+ const finalReturnKey=randomUUID();
+ for(const [index,original]of serial.entries()){
+  const current=(await context()).state.trips.find(t=>t.id===original.id);
+  await finish(current,{returnKey:index===serial.length-1?finalReturnKey:undefined,beforeReturn:async state=>{
+   const fleet=state.trucks.find(t=>t.id===truckId);assert.equal(fleet.status,'busy');assert.equal(fleet.dispatchId,dispatchId);
+   assert.ok(state.trips.filter(t=>t.requestId===b).every(t=>!t.truckId));
+  }});
+  const after=(await context()).state;unique(after);
+  if(index<serial.length-1){assert.equal(after.trucks.find(t=>t.id===truckId).status,'allocated');assert.equal(after.trucks.find(t=>t.id===truckId).dispatchId,dispatchId);assert.ok(after.trips.filter(t=>t.requestId===b).every(t=>!t.truckId));}
+ }
+ const handed=(await context()).state,next=handed.trips.find(t=>t.requestId===b&&t.truckId);
+ assert.ok(next);assert.equal(next.truckId,truckId);assert.notEqual(next.dispatchId,dispatchId);assert.equal(handed.requests.find(r=>r.id===a).status,'completed');
+ const beforeRetry={trips:handed.trips.length,ledger:handed.inventoryLedger.length,outbox:handed.erpOutbox.length};
+ const replay=await action('trip.return',{tripId:serial.at(-1).id},'stock2',{requestId:finalReturnKey});assert.equal(replay.status,200);assert.equal(replay.body.replayed,true);
+ assert.equal(replay.body.state.erpOutbox.length,0,'A Stockpile retry response still hides Admin-only ERP data');
+ const afterRetry=(await context()).state;
+ assert.deepEqual({trips:afterRetry.trips.length,ledger:afterRetry.inventoryLedger.length,outbox:afterRetry.erpOutbox.length},beforeRetry);
+ await finish(next);
+ const final=(await context()).state;unique(final);assert.ok(final.trucks.every(t=>t.status==='available'&&t.serialTripsRemaining===0&&t.dispatchId===null&&t.bindingStatus==='NONE'));
+ assert.equal(final.vessels[0].loadedT,60);assert.equal(final.vessels[0].reservedT,0);assert.equal(amount(final.stockpiles,'reservedM3'),0);
+ assert.equal(final.stockpiles.find(t=>t.id==='stock-2-3').onHandM3,70);assert.equal(final.erpOutbox.length,8);assert.equal(final.inventoryLedger.length,8);
 });
 
 test('automatic HTTP plan can reserve waiting cargo without Drivers and allocates immediately when Admin creates a Driver',async t=>{
@@ -147,13 +197,13 @@ test('automatic HTTP plan can reserve waiting cargo without Drivers and allocate
  const created=await call('/api/users','POST',{username:'new-auto-driver',displayName:'Synthetic new automatic Driver',role:'driver',password:'Synthetic-Auto-Driver-Test-42!'});
  assert.equal(created.status,201,JSON.stringify(created.body));
  const immediate=(await context()).state;unique(immediate);
- assert.equal(assigned(immediate).length,1,'Creating an available Driver automatically wakes existing pending cargo');
- assert.equal(assigned(immediate)[0].requestId,first);
+ assert.equal(assigned(immediate).length,2,'Creating an available Driver preassigns both capacity-limited serial trips');
+ assert.ok(assigned(immediate).every(t=>t.requestId===first));assert.equal(new Set(assigned(immediate).map(t=>t.truckId)).size,1);
  const immediateDispatch=immediate.dispatches.find(x=>x.requestId===first);
  assert.equal(immediateDispatch.pendingTrips,immediate.trips.filter(x=>x.dispatchId===immediateDispatch.id&&!terminal(x)).length,'Automatic split refreshes dispatch counts immediately');
  assert.equal(immediate.requests.find(x=>x.id===first).pendingTrips,immediateDispatch.pendingTrips,'Request counts reflect automatic split immediately');
  const second=await request(10),scheduled=await ok('request.plan',{requestId:second});
- unique(scheduled.state);assert.equal(assigned(scheduled.state).length,1);assert.equal(assigned(scheduled.state)[0].requestId,first);
+ unique(scheduled.state);assert.equal(assigned(scheduled.state).length,2);assert.ok(assigned(scheduled.state).every(t=>t.requestId===first));
  assert.ok(waiting(scheduled.state).some(x=>x.requestId===second));
  assert.equal((await context()).state.vessels[0].reservedT,40);
 });
@@ -168,7 +218,7 @@ test('enabling a truck through the Admin master API automatically wakes pending 
  const activated=await call('/api/action','POST',{action:'master.truck.save',payload:{id:'truck-1',active:true},requestId:randomUUID()});
  assert.equal(activated.status,200,JSON.stringify(activated.body));
  const current=(await context()).state;unique(current);
- assert.equal(assigned(current).length,1);assert.equal(assigned(current)[0].requestId,requestId);assert.equal(assigned(current)[0].truckId,'truck-1');
+ assert.equal(assigned(current).length,3);assert.ok(assigned(current).every(t=>t.requestId===requestId&&t.truckId==='truck-1'));assert.equal(amount(assigned(current),'tonnageT'),30);
  assert.equal(current.stockpiles.find(x=>x.id==='stock-2-3').reservedM3,15);
 });
 
