@@ -23,7 +23,8 @@ test('authenticated request detail is request-scoped, read-only and never create
  const request=(skuId,quantity,jettyId,vesselId)=>act('request.create',{transferMode:'MARINE',destinationLocationId:'stockpile-location-crusher-2',jettyId,vesselId,lines:[{skuId,quantity,unit:'t'}]}).requestId;
  const a=request('abu-batu',80,'jetty-1','vessel-1');act('request.plan',{requestId:a});
  const b=request('split-12',10,'jetty-2','vessel-3');act('request.plan',{requestId:b});
- const waiting=state.trips.find(x=>x.requestId===a&&x.status==='waiting_truck');assert.ok(waiting);assert.equal(waiting.truckId,null);
+ const waiting=state.trips.find(x=>x.requestId===b&&x.status==='waiting_truck');assert.ok(waiting);assert.equal(waiting.truckId,null);
+ assert.ok(state.trips.filter(x=>x.requestId===a).every(x=>x.status==='queued'&&x.truckId),'The first dispatch owns all of its serial assignments');
  await db.query('UPDATE aimoc_alfa_ops.operation SET document=$1::jsonb,revision=41 WHERE id=1',[JSON.stringify(state)]);
  server=http.createServer(createHandler(db));await new Promise(r=>server.listen(0,'127.0.0.1',r));
  const origin='http://127.0.0.1:'+server.address().port;
@@ -32,17 +33,19 @@ test('authenticated request detail is request-scoped, read-only and never create
  const before=await snapshot(),actionCount=Number((await db.query('SELECT count(*)::int AS n FROM aimoc_alfa_ops.actions')).rows[0].n);
  assert.equal((await call(a)).status,401);
  const admin=await call(a,'admin');assert.equal(admin.status,200);assert.equal(admin.body.revision,41);assert.match(admin.headers.get('cache-control'),/no-store/);
- assert.equal(admin.body.request.id,a);assert.equal(admin.body.trips.length,3);assert.equal(admin.body.truckAssignments.length,2);assert.equal(admin.body.waitingLoads.length,1);
- assert.equal(admin.body.waitingLoads[0].id,waiting.id);assert.equal(admin.body.waitingLoads[0].qr,null);
+ assert.equal(admin.body.request.id,a);assert.equal(admin.body.trips.length,3);assert.equal(admin.body.truckAssignments.length,2);assert.equal(admin.body.waitingLoads.length,0);
  assert.ok(admin.body.trips.every(x=>x.requestId===a));assert.ok(admin.body.dispatches.every(x=>x.requestId===a));
  assert.ok(!JSON.stringify(admin.body).includes(b));assert.equal(admin.body.summary.plannedT,80);
- const codes=admin.body.truckAssignments.flatMap(group=>group.trips.map(x=>x.qr.value));assert.equal(new Set(codes).size,2);
+ const codes=admin.body.truckAssignments.flatMap(group=>group.trips.map(x=>x.qr.value));assert.equal(new Set(codes).size,3);
  for(const value of codes){const q=JSON.parse(value);assert.equal(q.requestId,a);assert.equal(q.type,'AIMOC_ASSIGNMENT_REFERENCE');assert.ok(admin.body.trips.some(x=>x.id===q.tripId&&x.truckId===q.truckId));}
  const second=await call(b,'admin');assert.equal(second.status,200);assert.ok(second.body.trips.every(x=>x.requestId===b));assert.ok(!JSON.stringify(second.body).includes(a));
+ assert.equal(second.body.waitingLoads.length,1);assert.equal(second.body.waitingLoads[0].id,waiting.id);assert.equal(second.body.waitingLoads[0].qr,null);assert.equal(second.body.truckAssignments.length,0);
  assert.equal((await call(a,'jetty2')).status,404);assert.equal((await call(b,'jetty1')).status,404);assert.equal((await call(a,'jetty1')).status,200);
  assert.equal((await call(b,'detail-driver-1')).status,404);
- const owned=await call(a,'detail-driver-1');assert.equal(owned.status,200);assert.equal(owned.body.trips.length,1);assert.equal(owned.body.waitingLoads.length,0);assert.equal(owned.body.summary.plannedT,40);
- const stock=await call(a,'stock2');assert.equal(stock.status,200);assert.equal(stock.body.trips.length,1);assert.equal(stock.body.summary.plannedT,35);assert.equal(stock.body.truckAssignments.length,0);
+ const ownRows=state.trips.filter(x=>x.requestId===a&&x.assignedDriverUserId===actors['detail-driver-1'].id);
+ const owned=await call(a,'detail-driver-1');assert.equal(owned.status,200);assert.equal(owned.body.trips.length,ownRows.length);assert.equal(owned.body.waitingLoads.length,0);assert.equal(owned.body.summary.plannedT,ownRows.reduce((sum,x)=>sum+x.tonnageT,0));
+ assert.deepEqual(owned.body.trips.map(x=>x.id).sort(),ownRows.map(x=>x.id).sort());
+ const stock=await call(a,'stock2');assert.equal(stock.status,200);assert.equal(stock.body.trips.length,1);assert.equal(stock.body.summary.plannedT,35);assert.equal(stock.body.truckAssignments.length,1);
  assert.equal((await call(a,'admin','POST')).status,405);
  assert.equal((await call('req-does-not-exist','admin')).status,404);assert.equal((await call('bad%2Fid','admin')).status,400);
  assert.equal(await snapshot(),before);assert.equal(Number((await db.query('SELECT count(*)::int AS n FROM aimoc_alfa_ops.actions')).rows[0].n),actionCount);

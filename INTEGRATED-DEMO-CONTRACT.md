@@ -116,19 +116,24 @@ not camera-measured volume.
 There is no assignment form. `assignments` and explicit truck/Driver selectors
 are rejected with `MANUAL_ASSIGNMENT_NOT_ALLOWED`. The server chooses active,
 available trucks and active, available authenticated Drivers automatically.
-Any unfinished assigned trip occupies its truck and Driver, including a queued
-trip before start. A resource receives at most one unfinished assignment and
-can be allocated again only after the preceding return is independently
-verified. Missing free resources create waiting work instead of a manual task.
+Any unfinished assigned trip claims its truck and Driver, including a queued
+trip before start. A pair can hold several capacity-limited queued trips in
+the **same dispatch**. It cannot hold unfinished trips in another dispatch.
+Only the first unfinished trip can start, and the next waits for independently
+verified return. The pair becomes available for a different dispatch after its
+own last assigned trip is returned, even if other trucks still serve the first
+dispatch. Missing eligible resources create waiting cargo instead of a manual task.
 
 Planning reserves the full source SKU stock and safe MARINE vessel tonnage.
 Multiple trucks and requests/dispatches may share a source stockpile as long as
 unreserved stock remains. Remaining source/SKU cargo is represented by a
-`waiting_truck` row with null `truckId` and `assignedDriverUserId`. It can
-represent several future physical loads. When resources become available the
-server splits that cargo using the selected truck's bed volume, payload and
-SKU density. The remainder retains its reservation and global FIFO priority;
-no inventory movement is posted by assignment or splitting.
+`waiting_truck` row with null `truckId` and `assignedDriverUserId` only when
+there is no free pair or eligible pair already held by that dispatch. It can
+represent several future physical loads. Planning splits cargo using bed
+volume, payload and SKU density, and immediately assigns the serial queue
+within the dispatch. Remaining unassigned cargo retains its reservation and
+FIFO priority among eligible work; no inventory movement is posted by assignment
+or splitting.
 
 The allocator runs on planning and verified return; server hooks can also run
 it when Driver/truck availability is enabled. `queueSequence` preserves FIFO
@@ -136,6 +141,13 @@ priority even when a split remainder receives a new display sequence/ID.
 The response includes `assignedTripIds`/`autoAssignedTripIds`, `waitingTripIds`
 and `autoDispatch` counters. Request and dispatch contexts carry these counters
 as well. The maximum plan remains 2,000 physical trips, with 20,000 stored rows.
+
+Fleet status is computed globally before scoped IDs are redacted: `available`
+means no unfinished claims; `allocated` means assigned/pre-start serial work;
+`busy` means actual execution has started; `unavailable` means inactive.
+QR/tare recorded before Driver start do not make a truck busy. `dispatchId`,
+`queuedTrips`, `serialTripsRemaining`, `activeTripId` and `nextTripId` expose the
+binding and queue. References outside the actor's scope are not returned.
 
 Every trip has `assignedDriverUserId`, `stockpileId`, `crusherId`, `skuId`,
 `truckId`, `requestId`, `dispatchId`, `tonnageT`, `volumeM3`, `sequence`, plus
@@ -161,14 +173,14 @@ The HTTP command identity remains required independently.
 | `trip.arrive` | Admin / destination Stock (LAND) or assigned Jetty (MARINE) | in_transit | arrived |
 | `trip.receive` | Same destination operator | arrived; vessel must be loading for MARINE | unloaded; destination inventory or vessel cargo, receipt, ledger + outbox |
 | `trip.return_start` | Assigned Driver only | unloaded | returning |
-| `trip.return` | Admin / origin Stock | returning | returned; releases truck and driver, then automatically allocates the oldest waiting cargo |
+| `trip.return` | Admin / origin Stock | returning | returned; unlocks the next serial trip, or releases the pair after its last trip and allocates eligible waiting cargo |
 
 QR, tare and start may arrive in any order. Reconciliation occurs inside each
 relevant transaction; no separate manual replay/reconcile command is needed.
-`queued` already reserves the truck and driver, preventing a second task from
-being assigned to either resource. Different trucks/drivers may work in
-parallel; future cargo remains unassigned until return is
-independently verified. Drivers cannot receive their own load or verify their
+`queued` reserves the truck and driver for one dispatch. Multiple queued tasks
+within that dispatch are allowed, while parallel execution or another open
+dispatch claim is rejected. Different pairs may work in parallel. Drivers
+cannot receive their own load or verify their
 own return. Admins cannot impersonate the assigned Driver start/return-start.
 
 For this deterministic demonstration, accepted net tonnes must match planned
@@ -183,6 +195,15 @@ have `deliveryStatus: pending|partial|received`; operational `status` becomes
 with a returning driver remains `in_progress`, with nonzero `pendingTrips`.
 
 ## Scoped view and UI hints
+
+The Admin Dispatch & Trips table separates dispatch, trip, truck, source,
+destination and the SKU's planned trip quantity. Admin Details is read-only:
+assignment QR values come from the request-detail endpoint and must match the
+current request/trip/dispatch/truck tuple. Waiting cargo has no QR; historical
+QRs are labelled, and stale or mismatching references are hidden. Driver and
+location-operator workspaces retain their role-scoped operational actions.
+The explicit Admin QR scan test is available under Audit & NetSuite, outside
+Details; it retains the existing Admin-only command and simulation provenance.
 
 `integratedView` returns canonical masters plus only integrated trips visible
 to the actor. Drivers see their assigned trips, Stock sees source or LAND
