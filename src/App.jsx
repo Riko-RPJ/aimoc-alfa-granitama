@@ -398,7 +398,7 @@ export default function App() {
   const [booting,setBooting]=useState(true);
   const [logoutError,setLogoutError]=useState('');
   useEffect(()=>{let alive=true;api('/api/me').then(d=>{if(alive)setSession(d);}).catch(()=>{}).finally(()=>{if(alive)setBooting(false);});return()=>{alive=false;};},[]);
-  const logout=async()=>{try{await api('/api/logout',{method:'POST',headers:{'X-CSRF-Token':session?.csrfToken||''}});setSession(null);setLogoutError('');}catch(e){setLogoutError(e.message);}};
+  const logout=async()=>{try{await api('/api/logout',{method:'POST',headers:{'X-CSRF-Token':session?.csrfToken||''},body:'{}'});setSession(null);setLogoutError('');}catch(e){setLogoutError(e.message);}};
   if(booting)return <div className="boot"><Brand/><Loader2 className="spin" size={24}/><p>{tr('Menghubungkan ruang operasi…')}</p></div>;
   if(!session?.user)return <Login onLogin={d=>{setSession(d);setLogoutError('');}}/>;
   return <IntegratedWorkspace key={session.user.id} user={session.user} csrf={session.csrfToken||''} logout={logout} logoutError={logoutError} onUnauthorized={()=>setSession(null)}/>;
