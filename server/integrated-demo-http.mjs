@@ -1,5 +1,6 @@
 import {hash} from './auth.mjs';
 import {applyIntegratedAction,integratedView} from './integrated-demo-domain.mjs';
+import {summarizeSkuStocks} from './sku-stock-summary.mjs';
 
 const fail=(status,code,message)=>{throw Object.assign(new Error(message),{status,code});};
 const validId=x=>typeof x==='string'&&/^[\w-]{1,100}$/.test(x);
@@ -47,6 +48,19 @@ async function context(db,actor){
 
 export async function handleIntegratedDemo({db,path,method,req,actor,send,parseBody}) {
   if(!['admin','stock','jetty','driver'].includes(actor.role))fail(403,'FORBIDDEN_SCOPE','Peran tidak didukung.');
+  if(path==='/api/v1/demo/sku-stock'){
+    if(method!=='GET')fail(405,'METHOD_NOT_ALLOWED','Use GET.');
+    const params=new URL(req.url,'http://local').searchParams;
+    if(params.getAll('transferMode').length>1||params.getAll('destinationCrusherId').length>1)
+      fail(400,'INVALID_STOCK_QUERY','Parameter stok tidak boleh berulang.');
+    const transferMode=params.get('transferMode')||'MARINE';
+    const destinationCrusherId=params.get('destinationCrusherId')||undefined;
+    if(destinationCrusherId&&!validId(destinationCrusherId))fail(400,'INVALID_STOCK_QUERY','Identitas area tujuan tidak valid.');
+    const row=(await db.query('SELECT document,revision,updated_at FROM aimoc_alfa_ops.operation WHERE id=1')).rows[0];
+    if(!row)fail(503,'NOT_INITIALIZED','Data operasional belum diinisialisasi.');
+    const summary=summarizeSkuStocks(row.document,actor,{transferMode,destinationCrusherId});
+    return send(200,{...summary,revision:Number(row.revision),updatedAt:row.updated_at,serverTime:new Date().toISOString()});
+  }
   if(path==='/api/v1/demo/context'){
     if(method!=='GET')fail(405,'METHOD_NOT_ALLOWED','Use GET.');
     return send(200,await context(db,actor));
