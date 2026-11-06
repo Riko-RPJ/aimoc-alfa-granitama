@@ -53,7 +53,12 @@ test('authenticated multioperator API preserves shared operational state',async 
    assert.equal((await call('/api/state','GET',undefined,jetty)).body.state.vessels[0].loadedT,0);
    const unloaded=await action('trip.unload',{tripId:trip.id},jetty);assert.equal(unloaded.status,200);assert.equal(unloaded.body.state.vessels[0].loadedT,trip.tonnageT);assert.equal(unloaded.body.state.trucks.find(x=>x.id===trip.truckId).status,'busy');
    assert.equal((await action('trip.unload',{tripId:trip.id},jetty)).status,409);
-   const returned=await action('trip.return',{tripId:trip.id},admin);assert.equal(returned.status,200);assert.equal(returned.body.state.trucks.find(x=>x.id===trip.truckId).status,'available');
+   const returned=await action('trip.return',{tripId:trip.id},admin);
+   assert.equal(returned.status,200);
+   // A returned trip releases its active claim; queued work on the same truck
+   // still reserves it. Do not misreport an assigned truck as available.
+   const returnedTruck=returned.body.state.trucks.find(x=>x.id===trip.truckId);
+   assert.equal(returnedTruck.status,returnedTruck.queuedTrips>0?'allocated':'available');
    assert.equal(returned.body.state.erpOutbox.length,2);assert.ok(returned.body.state.erpOutbox.every(x=>x.status==='awaiting_configuration'));
   });
   await t.test('persists evidence, enforces provenance, camera alone never changes stock',async()=>{
@@ -65,6 +70,9 @@ test('authenticated multioperator API preserves shared operational state',async 
    assert.equal((await action('measurement.approve',{measurementId:m.id},admin)).status,409);
    const after=await call('/api/state','GET',undefined,admin);assert.equal(after.body.state.metrics.onHandM3,before.body.state.metrics.onHandM3);
    assert.equal((await call('/api/evidence/'+file.body.id,'GET',undefined,admin)).status,200);
+   const forbiddenAdminUpload=await call('/api/evidence','POST',{dataUrl:'data:image/png;base64,iVBORw0KGgo='},admin);
+   assert.equal(forbiddenAdminUpload.status,403,'Admin must not upload stockpile measurement photos');
+
    assert.equal((await call('/api/evidence/'+file.body.id,'GET',undefined,otherJetty)).status,403);
    assert.equal((await action('measurement.create',{stockpileId:'stock-1-1',method:'camera_pending',evidenceId:'fake-evidence'},stock)).status,403);
   });

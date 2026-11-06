@@ -1,6 +1,9 @@
 import {randomUUID} from 'node:crypto';
 import {hash,token,passwordHash,checkPassword,userView,cookieValue,sessionCookie} from './auth.mjs';
 import {applyAction,publicState} from './domain.mjs';
+import {projectV1Read,isV1UnimplementedMutation} from './v1/read-model.mjs';
+import {permissionsForRole,authorizeLegacyAction,TARGET_ADMIN_CAPABILITIES} from './role-permissions.mjs';
+import {listCrusherLoadingPoints,saveCrusherLoadingPoint} from './crusher-location-master.mjs';
 
 const fail=(status,code,message)=>{throw Object.assign(new Error(message),{status,code});};
 const validId=x=>typeof x==='string'&&/^[\w-]{1,100}$/.test(x);
@@ -22,6 +25,119 @@ export function createHandler(db,{secure=false}={}) {
         if(!origin||new URL(origin).host!==host)fail(403,'ORIGIN_REJECTED','Permintaan harus berasal dari aplikasi ini.');
         if(!String(req.headers['content-type']||'').startsWith('application/json'))fail(415,'CONTENT_TYPE','Gunakan JSON.');
       }
+      // LOCAL UAT ONLY: truck code opens a read-only, truck-scoped task list.
+      // It is NOT a privileged Driver session, and never records QR/TARE.
+      if(path==='/api/driver/truck-tasks'){
+        if(process.env.AIMOC_LOCAL_TRUCK_CODE_UAT!=='1')
+          fail(404,'NOT_FOUND','Truck-code access is not enabled in this environment.');
+        if(method!=='POST')fail(405,'METHOD_NOT_ALLOWED','Use POST.');
+        const body=await parseBody(req);
+        const truckCode=String(body.truckCode||'').trim().toUpperCase();
+        if(!/^DT-[0-9]{3,6}$/.test(truckCode))
+          fail(400,'INVALID_TRUCK_CODE','Masukkan kode truck, contoh DT-001.');
+        const sourceIp=String(req.socket?.remoteAddress||'unknown');
+        const key=hash('truck-lookup|'+sourceIp);
+        const limit=(await db.query(`INSERT INTO aimoc_alfa_ops.login_limits(key) VALUES($1)
+          ON CONFLICT(key) DO UPDATE SET
+          attempts=CASE WHEN login_limits.window_at<now()-interval '15 minutes' THEN 1 ELSE login_limits.attempts+1 END,
+          window_at=CASE WHEN login_limits.window_at<now()-interval '15 minutes' THEN now() ELSE login_limits.window_at END
+          RETURNING attempts`,[key])).rows[0];
+        if(limit.attempts>240)fail(429,'TOO_MANY_ATTEMPTS','Terlalu banyak pencarian kode truck.');
+        const record=(await db.query('SELECT document,revision FROM aimoc_alfa_ops.operation WHERE id=1')).rows[0];
+        if(!record)fail(503,'NOT_INITIALIZED','Data operasional tidak tersedia.');
+        const state=record.document;
+        const truck=(state.trucks||[]).find(t=>t.code?.toUpperCase()===truckCode&&t.active!==false);
+        if(!truck)fail(404,'TRUCK_NOT_FOUND','Kode truck tidak ditemukan atau tidak aktif.');
+        const events=(await db.query(
+          'SELECT trip_id,source,scanned_at FROM aimoc_alfa_ops.truck_qr_uat_events WHERE truck_id=$1 ORDER BY scanned_at DESC',
+          [truck.id])).rows;
+        const accessEvent=events[0]||null;
+        if(!accessEvent)fail(403,'TRUCK_ACCESS_DENIED','Token akses QR UAT tidak valid untuk truck ini.');
+        const progressRows=(await db.query(
+          'SELECT trip_id,status,started_at,completed_at FROM aimoc_alfa_ops.truck_task_uat_progress WHERE truck_id=$1',
+          [truck.id])).rows;
+        const progress=new Map(progressRows.map(r=>[r.trip_id,r]));
+        const allTrips=(state.trips||[]).filter(t=>t.truckId===truck.id&&
+          !['returned','cancelled'].includes(t.status)).sort((a,b)=>(a.sequence??0)-(b.sequence??0)||a.id.localeCompare(b.id));
+        const current=allTrips.find(t=>progress.get(t.id)?.status!=='COMPLETED');
+        const demoAvailable=allTrips.length>0&&allTrips.every(t=>progress.get(t.id)?.status==='COMPLETED');
+        const awaitingCount=0;
+        const trips=allTrips.map(t=>{
+            const dispatch=(state.dispatches||[]).find(x=>x.id===t.dispatchId);
+            const request=(state.requests||[]).find(x=>x.id===t.requestId);
+            const stockpile=(state.stockpiles||[]).find(x=>x.id===t.stockpileId);
+            const product=(state.products||[]).find(x=>x.id===t.skuId);
+            const jetty=(state.jetties||[]).find(x=>x.id===t.jettyId);
+            const vessel=(state.vessels||[]).find(x=>x.id===t.vesselId);
+            return {tripCode:t.code,dispatchCode:dispatch?.code||null,requestCode:request?.code||null,
+              truckCode,mode:request?.transferMode||'MARINE',status:t.status,
+              tripId:t.id,
+              qrAccess:{source:'ADMIN_SIMULATED_QR_UAT',scanTime:accessEvent.scanned_at,
+               physicalScanVerified:false},
+              uatTaskStatus:progress.get(t.id)?.status||'WAITING',
+              uatCanStart:current?.id===t.id&&!progress.has(t.id),
+              uatCanComplete:current?.id===t.id&&progress.get(t.id)?.status==='IN_PROGRESS',
+              uatStartedAt:progress.get(t.id)?.started_at||null,
+              uatCompletedAt:progress.get(t.id)?.completed_at||null,
+              sequence:t.sequence??null,materialCode:product?.code||null,
+              plannedVolumeM3:t.volumeM3??null,plannedTonnes:t.tonnageT??null,
+              stockpileCode:stockpile?.code||null,
+              destination:request?.transferMode==='LAND'?request.destination||null:vessel?.name||jetty?.name||null,
+              estimatedStartAt:t.estimatedStartAt||null};
+          });
+        return send(200,{source:'LOCAL_UAT_LEGACY',data_status:trips.length?'READY':'EMPTY',
+          access:'TRUCK_CODE_UAT_SIMULATION_ONLY',qr_scan:'PHYSICAL_NOT_VERIFIED',
+          awaitingQrCount:awaitingCount,
+          truck:{code:truck.code,availability:demoAvailable?'DEMO_AVAILABLE':(state.trips||[]).some(t=>t.truckId===truck.id&&!['queued','returned'].includes(t.status))?'IN_OPERATION':(state.trips||[]).some(t=>t.truckId===truck.id&&t.status==='queued')?'ALLOCATED':'AVAILABLE'},
+          trips,revision:Number(record.revision)});
+      }
+      // UAT-only self-reported task progress; no legacy trip transition, TARE, or stock effects.
+      if(path==='/api/driver/truck-task-action'){
+        if(process.env.AIMOC_LOCAL_TRUCK_CODE_UAT!=='1')
+          fail(404,'NOT_FOUND','Truck-code task simulator is disabled.');
+        if(method!=='POST')fail(405,'METHOD_NOT_ALLOWED','Use POST.');
+        const body=await parseBody(req);
+        const truckCode=String(body.truckCode||'').trim().toUpperCase();
+        const action=body.action;
+        if(!/^DT-[0-9]{3,6}$/.test(truckCode)||!validId(body.tripId)||!['START','COMPLETE'].includes(action))
+          fail(400,'INVALID_UAT_ACTION','Valid truck code, trip ID and START/COMPLETE required.');
+        const result=await db.transaction(async c=>{
+          // Shared lock serializes multiple devices attempting concurrent starts.
+          const record=(await c.query('SELECT document FROM aimoc_alfa_ops.operation WHERE id=1 FOR UPDATE')).rows[0];
+          if(!record)fail(503,'NOT_INITIALIZED','Operational state unavailable');
+          const state=record.document;
+          const truck=(state.trucks||[]).find(x=>x.code===truckCode&&x.active!==false);
+          if(!truck)fail(404,'TRUCK_NOT_FOUND','Truck not found');
+          const all=(state.trips||[]).filter(t=>t.truckId===truck.id&&
+            !['returned','cancelled'].includes(t.status))
+            .sort((a,b)=>(a.sequence??0)-(b.sequence??0)||a.id.localeCompare(b.id));
+          const target=all.find(t=>t.id===body.tripId);
+          if(!target)fail(403,'TRIP_TRUCK_MISMATCH','Trip is not assigned to this truck');
+          const qr=(await c.query('SELECT trip_id FROM aimoc_alfa_ops.truck_qr_uat_events WHERE truck_id=$1 LIMIT 1',[truck.id])).rows[0];
+          if(!qr)fail(409,'QR_NOT_SCANNED','Awaiting authorized QR simulation for truck');
+          const progress=(await c.query('SELECT trip_id,status FROM aimoc_alfa_ops.truck_task_uat_progress WHERE truck_id=$1',[truck.id])).rows;
+          const map=new Map(progress.map(r=>[r.trip_id,r.status]));
+          const firstIncomplete=all.find(t=>map.get(t.id)!=='COMPLETED');
+          const old=map.get(target.id);
+          if(action==='START'){
+            if(old==='IN_PROGRESS')return {status:'IN_PROGRESS',tripId:target.id,replayed:true};
+            if(old==='COMPLETED')fail(409,'TASK_ALREADY_COMPLETED','Task already completed');
+            if(firstIncomplete?.id!==target.id)
+              fail(409,'SERIAL_ORDER_REQUIRED','Finish earlier truck task before starting this one');
+            await c.query(`INSERT INTO aimoc_alfa_ops.truck_task_uat_progress(trip_id,truck_id,status)
+             VALUES($1,$2,'IN_PROGRESS')`,[target.id,truck.id]);
+            return {status:'IN_PROGRESS',tripId:target.id,replayed:false};
+          }
+          if(old==='COMPLETED')return {status:'COMPLETED',tripId:target.id,replayed:true};
+          if(old!=='IN_PROGRESS')fail(409,'TASK_NOT_STARTED','Start the task before completing');
+          if(firstIncomplete?.id!==target.id)fail(409,'SERIAL_ORDER_REQUIRED','Another task is ahead');
+          await c.query(`UPDATE aimoc_alfa_ops.truck_task_uat_progress
+           SET status='COMPLETED',completed_at=now() WHERE trip_id=$1 AND truck_id=$2`,[target.id,truck.id]);
+          return {status:'COMPLETED',tripId:target.id,replayed:false};
+        });
+        return send(200,{source:'DRIVER_UAT_SIMULATED_PROGRESS',physicalTripStatusChanged:false,
+          physicalQrVerified:false,wimVerified:false,...result});
+      }
       if(method==='POST'&&path==='/api/login') {
         const body=await parseBody(req);const username=String(body.username||body.email||'').trim().toLowerCase().replace(/@aimoc\.local$/,'').slice(0,80);
         const ip=String(req.headers['x-forwarded-for']||req.socket?.remoteAddress||'unknown').split(',')[0];
@@ -41,13 +157,132 @@ export function createHandler(db,{secure=false}={}) {
       if(!auth)fail(401,'AUTH_REQUIRED','Silakan login untuk mengakses aplikasi.');
       const actor=userView(auth);
       if(!['GET','HEAD'].includes(method)&&req.headers['x-csrf-token']!==auth.csrf_token)fail(403,'CSRF_REJECTED','Sesi berubah. Muat ulang halaman.');
+      if(path==='/api/uat/truck-task-status'){
+        if(process.env.AIMOC_LOCAL_TRUCK_CODE_UAT!=='1')
+          fail(404,'NOT_FOUND','UAT task status integration is not enabled.');
+        if(method!=='GET')fail(405,'METHOD_NOT_ALLOWED','Use GET.');
+        if(!['admin','stock','jetty'].includes(actor.role))
+          fail(403,'FORBIDDEN_SCOPE','Operational operator role required.');
+        const record=(await db.query('SELECT document,revision FROM aimoc_alfa_ops.operation WHERE id=1')).rows[0];
+        if(!record)fail(503,'NOT_INITIALIZED','Operational snapshot unavailable.');
+        const state=record.document;
+        const visible=(state.trips||[]).filter(t=>
+          actor.role==='admin'||
+          (actor.role==='stock'&&(actor.crusherIds||[]).includes(t.crusherId))||
+          (actor.role==='jetty'&&(actor.jettyIds||[]).includes(t.jettyId)));
+        const ids=visible.map(t=>t.id);
+        const [qr,progress]=await Promise.all([
+          db.query('SELECT trip_id,truck_id,scanned_at,source FROM aimoc_alfa_ops.truck_qr_uat_events WHERE trip_id=ANY($1::text[])',[ids]),
+          db.query('SELECT trip_id,truck_id,status,started_at,completed_at FROM aimoc_alfa_ops.truck_task_uat_progress WHERE trip_id=ANY($1::text[])',[ids])
+        ]);
+        const scans=new Map(qr.rows.map(x=>[x.trip_id,x]));
+        const advances=new Map(progress.rows.map(x=>[x.trip_id,x]));
+        return send(200,{source:'UAT_SIMULATED_CROSS_ROLE',operational_status_unchanged:true,
+          physical_qr_verified:false,legacy_revision:Number(record.revision),
+          items:visible.map(t=>{
+            const e=scans.get(t.id),p=advances.get(t.id);
+            const truck=(state.trucks||[]).find(x=>x.id===t.truckId);
+            return {trip_id:t.id,trip_code:t.code,truck_id:t.truckId,truck_code:truck?.code||null,
+              request_id:t.requestId,stockpile_id:t.stockpileId,planned_volume_m3:t.volumeM3??null,
+              legacy_status:t.status,qr_uat_scanned:!!e,qr_source:e?.source||null,
+              task_uat_status:p?.status||(e?'WAITING':'QR_PENDING'),
+              simulated_dump:p?.status==='COMPLETED',
+              task_uat_started_at:p?.started_at||null,task_uat_completed_at:p?.completed_at||null};
+          })});
+      }
+      if(path==='/api/uat/truck-qr'){
+        if(process.env.AIMOC_LOCAL_TRUCK_CODE_UAT!=='1')
+          fail(404,'NOT_FOUND','QR UAT action not enabled');
+        if(actor.role!=='admin')fail(403,'FORBIDDEN_SCOPE','Only Admin may simulate a QR scan');
+        if(method==='GET'){
+          const events=(await db.query('SELECT trip_id,truck_id,source,scanned_at FROM aimoc_alfa_ops.truck_qr_uat_events ORDER BY scanned_at DESC')).rows;
+          return send(200,{source:'ADMIN_SIMULATED_QR_UAT',items:events});
+        }
+        if(method!=='POST')fail(405,'METHOD_NOT_ALLOWED','Use POST');
+        const body=await parseBody(req);
+        if(!validId(body.tripId)||!validId(body.truckId))
+          fail(400,'INVALID_TRIP_TRUCK','Trip and Truck IDs are required.');
+        const found=(await db.query('SELECT document FROM aimoc_alfa_ops.operation WHERE id=1')).rows[0];
+        if(!found)fail(503,'NOT_INITIALIZED','Legacy dispatch not available');
+        const trip=(found.document.trips||[]).find(t=>t.id===body.tripId);
+        if(!trip||trip.truckId!==body.truckId||!trip.dispatchId)
+          fail(409,'TRIP_TRUCK_MISMATCH','Trip is not assigned to the selected truck.');
+        if(['returned','cancelled'].includes(trip.status))
+          fail(409,'TRIP_CLOSED','Cannot simulate QR for a closed trip.');
+        const existing=(await db.query('SELECT * FROM aimoc_alfa_ops.truck_qr_uat_events WHERE trip_id=$1',
+          [trip.id])).rows[0];
+        if(existing&&existing.truck_id!==trip.truckId)
+          fail(409,'QR_CONFLICT','Trip QR marker is linked to another truck.');
+        const accessToken=token();
+        const event=existing
+          ?(await db.query(`UPDATE aimoc_alfa_ops.truck_qr_uat_events SET access_token_hash=$2,actor_id=$3
+             WHERE trip_id=$1 RETURNING trip_id,truck_id,source,scanned_at`,[trip.id,hash(accessToken),actor.id])).rows[0]
+          :(await db.query(`INSERT INTO aimoc_alfa_ops.truck_qr_uat_events
+             (trip_id,truck_id,actor_id,source,access_token_hash) VALUES($1,$2,$3,'ADMIN_SIMULATED_QR_UAT',$4)
+             RETURNING trip_id,truck_id,source,scanned_at`,[trip.id,trip.truckId,actor.id,hash(accessToken)])).rows[0];
+        return send(200,{source:'ADMIN_SIMULATED_QR_UAT',status:existing?'TOKEN_ROTATED':'RECORDED',
+          physicalScanVerified:false,tripId:trip.id,truckId:trip.truckId,scannedAt:event.scanned_at,
+          legacyTripStatus:trip.status,accessToken});
+      }
       if(method==='GET'&&path==='/api/me')return send(200,{user:actor,csrfToken:auth.csrf_token});
+      if(method==='GET'&&path==='/api/capabilities'){
+        const permissions=permissionsForRole(actor.role);
+        return send(200,{source:'LEGACY_AUTHORIZATION',role:actor.role,permissions,
+          locationScope:{crusherIds:actor.crusherIds||[],jettyIds:actor.jettyIds||[]},
+          features:actor.role==='admin'?TARGET_ADMIN_CAPABILITIES:[],
+          targetWritesEnabled:false,driverProductionIntegrated:false});
+      }
+
       if(method==='POST'&&path==='/api/logout'){await db.query('DELETE FROM aimoc_alfa_ops.sessions WHERE token_hash=$1',[hash(session)]);return send(200,{ok:true},{'Set-Cookie':sessionCookie('',secure,0)});}
+      // Local-only separate location master. Existing operational JSON and
+      // production normalized schemas remain untouched. The table is created
+      // explicitly by local.mjs, NOT by production application startup.
+      if(path==='/api/crusher-loading-points'&&['GET','POST'].includes(method)){
+        if(actor.role!=='admin')fail(403,'FORBIDDEN_SCOPE','Only Admin manages Crusher Location Master.');
+        if(method==='GET')return send(200,{source:'LOCAL_LOCATION_MASTER',items:await listCrusherLoadingPoints(db)});
+        const body=await parseBody(req);
+        const row=(await db.query('SELECT document FROM aimoc_alfa_ops.operation WHERE id=1')).rows[0];
+        if(!row)fail(503,'NOT_INITIALIZED','Master data not initialized.');
+        const crusherIds=(row.document.crushers||[]).filter(x=>x.active!==false).map(x=>x.id);
+        const saved=await saveCrusherLoadingPoint(db,{actorId:actor.id,body,crusherIds});
+        return send(200,{source:'LOCAL_LOCATION_MASTER',item:saved});
+      }
+      // Local Driver UAT can authenticate to inspect the data-free shell only.
+      // Never expose an unscoped legacy operation snapshot to this role.
+      if(actor.role==='driver'){
+        if(method==='GET'&&path==='/api/v1/session')
+          return send(200,{schema_version:'1.0',resource:'session',source:'LOCAL_UAT',
+            data_status:'NOT_INTEGRATED',as_of:null,
+            data:{user_id:actor.id,role:'DRIVER',display_name:actor.displayName,
+              location_scope:{crusher_ids:[],jetty_ids:[]},permissions:[]}});
+        if(method==='GET'&&path.startsWith('/api/v1/driver/'))
+          return send(200,{schema_version:'1.0',resource:'driver_trip',source:'NOT_INTEGRATED',
+            data_status:'NOT_INTEGRATED',as_of:null,reason:'Driver operational integration pending',data:null});
+        if(!['GET','HEAD'].includes(method)&&path.startsWith('/api/v1/'))
+          fail(501,'V1_COMMAND_NOT_INTEGRATED','Driver write commands are not active.');
+        fail(403,'FORBIDDEN_SCOPE','Driver UAT cannot access legacy operational data.');
+      }
       const view=async c=>{const row=(await c.query('SELECT document,revision,updated_at FROM aimoc_alfa_ops.operation WHERE id=1')).rows[0];if(!row)fail(503,'NOT_INITIALIZED','Aplikasi belum diinisialisasi.');return {state:publicState(row.document,actor),revision:Number(row.revision),updatedAt:row.updated_at,serverTime:new Date().toISOString()};};
+      if(method==='GET'&&path.startsWith('/api/v1/')) {
+        // Authenticate and filter the legacy operation first. No unscoped rows
+        // may cross the v1 read boundary.
+        const v=await view(db);
+        const projected=projectV1Read(path,v,actor,url.searchParams);
+        if(projected)return send(200,projected);
+        fail(404,'RESOURCE_NOT_FOUND','Endpoint API v1 tidak tersedia.');
+      }
+      if(isV1UnimplementedMutation(path,method)) {
+        // Never translate a target-v1 business command into a legacy mutation:
+        // especially not marine sequence, inventory departure, unload or WIM.
+        fail(501,'V1_COMMAND_NOT_INTEGRATED','Perintah API v1 belum terintegrasi dengan domain transaksi dan bukti verifikasi. Tidak ada perubahan yang disimpan.');
+      }
       if(method==='GET'&&path==='/api/state')return send(200,await view(db));
       if(method==='POST'&&path==='/api/action') {
         const body=await parseBody(req);
         if(!validId(body.requestId)||typeof body.action!=='string')fail(400,'INVALID_ACTION','Identitas aksi tidak valid.');
+        const decision=authorizeLegacyAction(actor.role,body.action);
+        if(!decision.allowed)fail(403,'PERMISSION_DENIED','Aksi tidak diizinkan untuk role ini atau belum terintegrasi.');
+
         const payload=body.payload||{};const payloadHash=hash(JSON.stringify([body.action,payload]));
         const result=await db.transaction(async c=>{
           const locked=(await c.query('SELECT document,revision FROM aimoc_alfa_ops.operation WHERE id=1 FOR UPDATE')).rows[0];
@@ -59,7 +294,7 @@ export function createHandler(db,{secure=false}={}) {
             payload.evidenceId=payload.evidenceId||payload.evidence?.id;
             if(payload.evidenceId){
               const evidence=(await c.query('SELECT actor_id,filename FROM aimoc_alfa_ops.evidence WHERE id=$1',[payload.evidenceId])).rows[0];
-              if(!evidence||(evidence.actor_id!==actor.id&&actor.role!=='admin'))fail(403,'EVIDENCE_ACCESS','Bukti pengukuran tidak dapat diakses.');
+              if(!evidence||evidence.actor_id!==actor.id)fail(403,'EVIDENCE_ACCESS','Pengukuran hanya dapat memakai bukti unggahan operator sendiri.');
               payload.evidenceName=evidence.filename;
             }
             if(payload.method==='camera_pending'&&!payload.evidenceId)fail(400,'EVIDENCE_REQUIRED','Unggah foto sebelum menyimpan bukti kamera.');
@@ -86,7 +321,7 @@ export function createHandler(db,{secure=false}={}) {
         }
       }
       if(path==='/api/evidence'&&method==='POST'){
-        if(!['stock','admin'].includes(actor.role))fail(403,'ROLE_REQUIRED','Hanya operator stockpile dan Admin.');
+        if(actor.role!=='stock')fail(403,'ROLE_REQUIRED','Hanya operator Stockpile yang dapat mengunggah bukti pengukuran.');
         const b=await parseBody(req);const match=/^data:(image\/(?:jpeg|png));base64,([A-Za-z0-9+/=]+)$/.exec(String(b.dataUrl||''));
         if(!match)fail(400,'IMAGE_REQUIRED','Gunakan foto JPEG atau PNG.');
         const bytes=Buffer.from(match[2],'base64');const isJpeg=bytes[0]===255&&bytes[1]===216&&bytes[2]===255;const isPng=bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]));

@@ -18,7 +18,7 @@ const record=(s,u,type,entityId,description)=>{s.events.push({id:uid('evt'),at:n
 const erp=(s,type,entityId,payload)=>{s.erpOutbox.push({id:uid('erp'),createdAt:now(),type,entityId,status:'awaiting_configuration',system:'oracle_netsuite',payload});};
 const ledger=(s,u,type,stockpileId,volumeM3,referenceId)=>s.inventoryLedger.push({id:uid('led'),at:now(),actorId:u.id,type,stockpileId,volumeM3:r(volumeM3),referenceId});
 const tripScope=(s,u,t,role)=>scope(u,role,role==='stock'?get(s,'stockpiles',t.stockpileId).crusherId:t.jettyId);
-const metricsForTruck=(s,t)=>{const trips=s.trips.filter(x=>x.truckId===t.id);const active=trips.find(x=>activeStatuses.has(x.status));const queued=trips.filter(x=>x.status==='queued').sort((a,b)=>a.sequence-b.sequence);return {...t,status:!t.active?'unavailable':active?'busy':'available',activeTripId:active?.id||null,queuedTrips:queued.length,nextTripId:queued[0]?.id||null,estimatedAvailableAt:active?.estimatedReturnAt||now()};};
+const metricsForTruck=(s,t)=>{const trips=s.trips.filter(x=>x.truckId===t.id&&x.status!=='returned');const active=trips.find(x=>activeStatuses.has(x.status));const queued=trips.filter(x=>x.status==='queued').sort((a,b)=>a.sequence-b.sequence);return {...t,status:!t.active?'unavailable':active?'busy':queued.length?'allocated':'available',activeTripId:active?.id||null,queuedTrips:queued.length,nextTripId:queued[0]?.id||null,estimatedAvailableAt:active?.estimatedReturnAt||queued.at(-1)?.estimatedReturnAt||now()};};
 
 function refreshStatuses(s){
   for(const d of s.dispatches){const tt=s.trips.filter(t=>t.dispatchId===d.id);d.completedTrips=tt.filter(t=>['unloaded','returned'].includes(t.status)).length;d.deliveredM3=r(tt.filter(t=>['unloaded','returned'].includes(t.status)).reduce((a,t)=>a+t.volumeM3,0));d.deliveredT=r(tt.filter(t=>['unloaded','returned'].includes(t.status)).reduce((a,t)=>a+t.tonnageT,0));d.status=tt.length&&d.completedTrips===tt.length?'completed':tt.some(t=>t.status!=='queued')?'in_progress':'planned';}
@@ -58,28 +58,89 @@ function saveMaster(s,entity,p,u){
   record(s,u,'master.saved',row.id,`${entity} ${row.code} disimpan`);return{entityId:row.id,message:'Master tersimpan.'};
 }
 
+function deleteMaster(s,entity,p,u){
+  admin(u);
+  const keys={product:'products',crusher:'crushers',stockpile:'stockpiles',truck:'trucks',jetty:'jetties',vessel:'vessels'};
+  const key=keys[entity];if(!key)fail('Master tidak didukung.');
+  const row=get(s,key,p.id);
+  const referenced={
+    product:()=>s.stockpiles.some(x=>x.skuId===row.id)||s.requests.some(x=>x.lines?.some(l=>l.skuId===row.id))||s.dispatches.some(x=>x.skuId===row.id)||s.trips.some(x=>x.skuId===row.id),
+    crusher:()=>s.stockpiles.some(x=>x.crusherId===row.id)||s.dispatches.some(x=>x.crusherId===row.id)||s.trips.some(x=>x.crusherId===row.id)||s.measurements.some(x=>x.crusherId===row.id),
+    stockpile:()=>row.onHandM3>EPS||row.reservedM3>EPS||s.dispatches.some(x=>x.stockpileId===row.id)||s.trips.some(x=>x.stockpileId===row.id)||s.measurements.some(x=>x.stockpileId===row.id)||s.inventoryLedger.some(x=>x.stockpileId===row.id),
+    truck:()=>s.trips.some(x=>x.truckId===row.id),
+    jetty:()=>s.vessels.some(x=>x.jettyId===row.id)||s.requests.some(x=>x.jettyId===row.id)||s.dispatches.some(x=>x.jettyId===row.id)||s.trips.some(x=>x.jettyId===row.id),
+    vessel:()=>row.loadedT>EPS||row.reservedT>EPS||s.requests.some(x=>x.vesselId===row.id)||s.dispatches.some(x=>x.vesselId===row.id)||s.trips.some(x=>x.vesselId===row.id)
+  }[entity];
+  if(referenced())fail('Master masih digunakan oleh data operasional dan tidak dapat dihapus. Nonaktifkan master bila riwayat harus dipertahankan.','MASTER_IN_USE',409);
+  s[key].splice(s[key].indexOf(row),1);
+  record(s,u,'master.deleted',row.id,`${entity} ${row.code} dihapus`);return{entityId:row.id,message:'Master dihapus.'};
+}
+
 function createRequest(s,p,u){
+  // Land transfer requests are stored as planning requests only. They do not
+  // trigger the legacy jetty/vessel dispatch planner or convert m3 to tonnes.
+  if(p.transferMode==='LAND'){
+    admin(u);
+    const allowed=['transferMode','destinationId','destination','lines'];
+    if(!p||Object.keys(p).some(k=>!allowed.includes(k)))fail('Field permintaan LAND tidak dikenali.','REQUEST_FIELD_INVALID',400);
+    const destinationId=text(p.destinationId,'Destination ID',100);
+    if(!/^[a-zA-Z0-9_-]{2,100}$/.test(destinationId))fail('ID lokasi tujuan LAND tidak valid.','DESTINATION_INVALID',400);
+    const destination=text(p.destination,'Nama tujuan',160);
+    if(!Array.isArray(p.lines)||!p.lines.length||p.lines.length>6)fail('Permintaan harus berisi 1–6 SKU.','REQUEST_LINES_INVALID',400);
+    const seen=new Set();
+    const lines=p.lines.map(l=>{
+      const product=get(s,'products',l.skuId);
+      if(!product.active||seen.has(product.id))fail('SKU nonaktif atau duplikat.','SKU_INVALID',400);
+      seen.add(product.id);
+      const quantity=positive(l.quantity,'Jumlah transfer',1000000);
+      if(!['m3','t'].includes(l.unit))fail('Satuan harus m3 atau t.','UNIT_INVALID',400);
+      return {skuId:product.id,quantity,unit:l.unit,volumeM3:null,tonnageT:null,
+        quantitySource:'REQUESTED_UNVERIFIED'};
+    });
+    const req={id:uid('req'),code:code('TR',s.requests),transferMode:'LAND',
+      destinationId,destination,jettyId:null,vesselId:null,lines,status:'requested',
+      planningStatus:'NOT_INTEGRATED',requestedBy:u.id,createdAt:now(),
+      deliveredM3:0,deliveredT:0,quantitySource:'REQUESTED_UNVERIFIED'};
+    s.requests.push(req);
+    record(s,u,'request.created',req.id,req.code+': LAND '+lines.length+' SKU ke '+destination);
+    return {entityId:req.id,message:'Permintaan LAND tersimpan. Dispatch planning belum terintegrasi.'};
+  }
+  if(p.transferMode!==undefined&&p.transferMode!=='MARINE')fail('Mode harus LAND atau MARINE.','TRANSFER_MODE_INVALID',400);
+
   const jetty=get(s,'jetties',p.jettyId);scope(u,'jetty',jetty.id);const vessel=get(s,'vessels',p.vesselId);
   if(vessel.jettyId!==jetty.id||vessel.active===false||vessel.status==='closed'||jetty.active===false)fail('Kapal dan jetty tidak cocok, nonaktif, atau sudah ditutup.');
   if(!Array.isArray(p.lines)||!p.lines.length||p.lines.length>6)fail('Permintaan harus berisi 1–6 SKU.');
   const seen=new Set();const lines=p.lines.map(l=>{const product=get(s,'products',l.skuId);if(!product.active||seen.has(product.id))fail('SKU nonaktif atau duplikat.');seen.add(product.id);const quantity=positive(l.quantity,'Jumlah transfer',1000000);if(!['m3','t'].includes(l.unit))fail('Satuan harus m3 atau t.');const volumeM3=l.unit==='m3'?quantity:r(quantity/product.densityTPerM3);return{skuId:product.id,quantity,unit:l.unit,volumeM3,tonnageT:r(volumeM3*product.densityTPerM3),densityTPerM3:product.densityTPerM3};});
-  const req={id:uid('req'),code:code('TR',s.requests),jettyId:jetty.id,vesselId:vessel.id,destination:text(p.destination||'Stockpile Marunda','Tujuan',160),lines,status:'requested',requestedBy:u.id,createdAt:now(),deliveredM3:0,deliveredT:0};s.requests.push(req);record(s,u,'request.created',req.id,`${req.code}: ${lines.length} SKU ke ${vessel.name}`);return{entityId:req.id,message:'Permintaan transfer dibuat.'};
+  const req={id:uid('req'),code:code('TR',s.requests),transferMode:'MARINE',jettyId:jetty.id,vesselId:vessel.id,destination:text(p.destination||'Stockpile Marunda','Tujuan',160),lines,status:'requested',requestedBy:u.id,createdAt:now(),deliveredM3:0,deliveredT:0};s.requests.push(req);record(s,u,'request.created',req.id,`${req.code}: ${lines.length} SKU ke ${vessel.name}`);return{entityId:req.id,message:'Permintaan transfer dibuat.'};
 }
 
 function planRequest(s,p,u){
-  admin(u);const req=get(s,'requests',p.requestId);if(req.status!=='requested')fail('Permintaan sudah direncanakan.','ALREADY_PLANNED',409);
+  admin(u);const req=get(s,'requests',p.requestId);if(req.transferMode==='LAND')fail('LAND dispatch planner belum terintegrasi. Request tersimpan tanpa reservasi.','LAND_DISPATCH_NOT_INTEGRATED',409);if(req.status!=='requested')fail('Permintaan sudah direncanakan.','ALREADY_PLANNED',409);
   const vessel=get(s,'vessels',req.vesselId);if(vessel.active===false||get(s,'jetties',req.jettyId).active===false||vessel.status==='closed'||vessel.jettyId!==req.jettyId)fail('Tujuan kapal atau jetty tidak lagi tersedia.');
   const totalT=r(req.lines.reduce((a,l)=>a+l.tonnageT,0));if(totalT>vessel.payloadLimitT-vessel.loadedT-vessel.reservedT+EPS)fail('Sisa kapasitas kapal tidak mencukupi termasuk reservasi berjalan.','VESSEL_CAPACITY',409);
   const fleet=s.trucks.filter(t=>t.active);if(!fleet.length)fail('Tidak ada truk aktif.','NO_TRUCKS',409);
   const allocations=[];
   for(const line of req.lines){if(!get(s,'products',line.skuId).active)fail('SKU dalam permintaan sudah nonaktif.');let remaining=line.volumeM3;const stocks=s.stockpiles.filter(x=>x.active&&x.skuId===line.skuId&&get(s,'crushers',x.crusherId).active).sort((a,b)=>(b.onHandM3-b.reservedM3)-(a.onHandM3-a.reservedM3)||a.code.localeCompare(b.code));for(const stock of stocks){const take=r(Math.min(remaining,stock.onHandM3-stock.reservedM3));if(take>EPS){allocations.push({stock,line,volumeM3:take});remaining=r(remaining-take);}if(remaining<=EPS)break;}if(remaining>EPS)fail(`Stok tersedia ${get(s,'products',line.skuId).name} tidak mencukupi.`,'INSUFFICIENT_STOCK',409);}
   const loads=new Map(fleet.map(t=>[t.id,s.trips.filter(x=>x.truckId===t.id&&x.status!=='returned').length*t.cycleMinutes]));const result=[];let globalSequence=s.trips.reduce((m,t)=>Math.max(m,t.sequence||0),0);
-  const dispatchCount=allocations.length,initialTripCount=s.trips.length;let totalTripsEstimate=0;for(const a of allocations){const maxCap=Math.max(...fleet.map(t=>Math.min(t.bedM3,t.payloadLimitT/a.line.densityTPerM3)));totalTripsEstimate+=Math.ceil(a.volumeM3/maxCap);}if(totalTripsEstimate>2000||s.trips.length+totalTripsEstimate>20000)fail('Permintaan terlalu besar untuk satu rencana (maks. 2.000 ritase).','TRIP_LIMIT',409);
-  for(const a of allocations){const d={id:uid('dsp'),code:code('DSP',s.dispatches),requestId:req.id,stockpileId:a.stock.id,crusherId:a.stock.crusherId,skuId:a.line.skuId,jettyId:req.jettyId,vesselId:req.vesselId,volumeM3:a.volumeM3,tonnageT:r(a.volumeM3*a.line.densityTPerM3),tripIds:[],status:'planned',createdAt:now(),completedTrips:0,deliveredM3:0,deliveredT:0};s.dispatches.push(d);let remaining=a.volumeM3;
-    while(remaining>EPS){if(s.trips.length-initialTripCount>=2000||s.trips.length>=20000)fail('Rencana aktual melampaui batas ritase. Pecah permintaan menjadi beberapa batch.','TRIP_LIMIT',409);const truck=[...fleet].sort((a,b)=>loads.get(a.id)-loads.get(b.id)||a.code.localeCompare(b.code))[0];const volumeM3=r(Math.min(remaining,truck.bedM3,Math.floor(truck.payloadLimitT/a.line.densityTPerM3*1e6)/1e6));if(volumeM3<=EPS)fail('Kapasitas truk terlalu kecil.');const readyMinutes=loads.get(truck.id);const t={id:uid('trip'),code:code('RIT',s.trips),dispatchId:d.id,requestId:req.id,stockpileId:a.stock.id,crusherId:a.stock.crusherId,skuId:a.line.skuId,truckId:truck.id,jettyId:req.jettyId,vesselId:req.vesselId,volumeM3,tonnageT:r(volumeM3*a.line.densityTPerM3),densityTPerM3:a.line.densityTPerM3,status:'queued',sequence:++globalSequence,createdAt:now(),estimatedStartAt:new Date(Date.now()+readyMinutes*60000).toISOString(),estimatedReturnAt:new Date(Date.now()+(readyMinutes+truck.cycleMinutes)*60000).toISOString()};s.trips.push(t);d.tripIds.push(t.id);loads.set(truck.id,readyMinutes+truck.cycleMinutes);remaining=r(remaining-volumeM3);}
-    a.stock.reservedM3=r(a.stock.reservedM3+a.volumeM3);result.push(d.id);
+  const initialTripCount=s.trips.length;let totalTripsEstimate=0;for(const a of allocations){const maxCap=Math.max(...fleet.map(t=>Math.min(t.bedM3,t.payloadLimitT/a.line.densityTPerM3)));totalTripsEstimate+=Math.ceil(a.volumeM3/maxCap);}if(totalTripsEstimate>2000||s.trips.length+totalTripsEstimate>20000)fail('Permintaan terlalu besar untuk satu rencana (maks. 2.000 ritase).','TRIP_LIMIT',409);
+  const stockpileIds=[...new Set(allocations.map(a=>a.stock.id))],crusherIds=[...new Set(allocations.map(a=>a.stock.crusherId))],skuIds=[...new Set(allocations.map(a=>a.line.skuId))];
+  const dispatch={id:uid('dsp'),code:code('DSP',s.dispatches),requestId:req.id,
+    stockpileId:stockpileIds.length===1?stockpileIds[0]:null,
+    crusherId:crusherIds.length===1?crusherIds[0]:null,
+    skuId:skuIds.length===1?skuIds[0]:null,
+    stockpileIds,crusherIds,skuIds,
+    allocations:allocations.map(a=>({stockpileId:a.stock.id,crusherId:a.stock.crusherId,skuId:a.line.skuId,
+      volumeM3:a.volumeM3,tonnageT:r(a.volumeM3*a.line.densityTPerM3)})),
+    jettyId:req.jettyId,vesselId:req.vesselId,
+    volumeM3:r(allocations.reduce((total,a)=>total+a.volumeM3,0)),
+    tonnageT:r(allocations.reduce((total,a)=>total+a.volumeM3*a.line.densityTPerM3,0)),
+    tripIds:[],status:'planned',createdAt:now(),completedTrips:0,deliveredM3:0,deliveredT:0};
+  s.dispatches.push(dispatch);result.push(dispatch.id);
+  for(const a of allocations){let remaining=a.volumeM3;
+    while(remaining>EPS){if(s.trips.length-initialTripCount>=2000||s.trips.length>=20000)fail('Rencana aktual melampaui batas ritase. Pecah permintaan menjadi beberapa batch.','TRIP_LIMIT',409);const truck=[...fleet].sort((a,b)=>loads.get(a.id)-loads.get(b.id)||a.code.localeCompare(b.code))[0];const volumeM3=r(Math.min(remaining,truck.bedM3,Math.floor(truck.payloadLimitT/a.line.densityTPerM3*1e6)/1e6));if(volumeM3<=EPS)fail('Kapasitas truk terlalu kecil.');const readyMinutes=loads.get(truck.id);const t={id:uid('trip'),code:code('RIT',s.trips),dispatchId:dispatch.id,requestId:req.id,stockpileId:a.stock.id,crusherId:a.stock.crusherId,skuId:a.line.skuId,truckId:truck.id,jettyId:req.jettyId,vesselId:req.vesselId,volumeM3,tonnageT:r(volumeM3*a.line.densityTPerM3),densityTPerM3:a.line.densityTPerM3,status:'queued',sequence:++globalSequence,createdAt:now(),estimatedStartAt:new Date(Date.now()+readyMinutes*60000).toISOString(),estimatedReturnAt:new Date(Date.now()+(readyMinutes+truck.cycleMinutes)*60000).toISOString()};s.trips.push(t);dispatch.tripIds.push(t.id);loads.set(truck.id,readyMinutes+truck.cycleMinutes);remaining=r(remaining-volumeM3);}
+    a.stock.reservedM3=r(a.stock.reservedM3+a.volumeM3);
   }
-  const actualReservedT=r(s.trips.filter(t=>t.requestId===req.id).reduce((a,t)=>a+t.tonnageT,0));if(actualReservedT>vessel.payloadLimitT-vessel.loadedT-vessel.reservedT+EPS)fail('Pembulatan kuantitas melampaui kapasitas kapal; kurangi sedikit permintaan.','VESSEL_CAPACITY',409);vessel.reservedT=r(vessel.reservedT+actualReservedT);req.status='planned';req.plannedAt=now();req.plannedBy=u.id;record(s,u,'request.planned',req.id,`${req.code}: ${dispatchCount} dispatch, ${result.reduce((a,id)=>a+get(s,'dispatches',id).tripIds.length,0)} ritase serial`);return{entityId:req.id,dispatchIds:result,message:'Stok dan kapasitas kapal direservasi; antrean truk dibuat.'};
+  const actualReservedT=r(s.trips.filter(t=>t.requestId===req.id).reduce((a,t)=>a+t.tonnageT,0));if(actualReservedT>vessel.payloadLimitT-vessel.loadedT-vessel.reservedT+EPS)fail('Pembulatan kuantitas melampaui kapasitas kapal; kurangi sedikit permintaan.','VESSEL_CAPACITY',409);vessel.reservedT=r(vessel.reservedT+actualReservedT);req.dispatchId=dispatch.id;req.status='planned';req.plannedAt=now();req.plannedBy=u.id;record(s,u,'request.planned',req.id,`${req.code}: 1 dispatch, ${dispatch.tripIds.length} ritase serial`);return{entityId:req.id,dispatchIds:result,message:'Stok dan kapasitas kapal direservasi; antrean truk dibuat.'};
 }
 
 function moveTrip(s,action,p,u){
@@ -109,7 +170,64 @@ function moveTrip(s,action,p,u){
   if(action==='return')t.returnedAt=now();t.status=rule[1];record(s,u,`trip.${action}`,t.id,`${t.code} → ${t.status}`);refreshStatuses(s);return{entityId:t.id,message:`Ritase ${t.code}: ${t.status}.`};
 }
 
+export function previewLandFleetAllocation(s,requestId){
+  const request=get(s,'requests',requestId);
+  if(request.transferMode!=='LAND')fail('Fleet allocation preview hanya tersedia untuk permintaan LAND.','TRANSFER_MODE_INVALID',400);
+  const positiveFinite=value=>value!==null&&value!==undefined&&value!==''&&Number.isFinite(Number(value))&&Number(value)>0?Number(value):null;
+  const trucks=(s.trucks||[]).map(t=>{
+    const hasOpenTrip=(s.trips||[]).some(x=>x.truckId===t.id&&x.status!=='returned');
+    const active=t.active===true;
+    const payloadLimit=positiveFinite(t.payloadLimitT),bedCapacity=positiveFinite(t.bedM3),cycleTime=positiveFinite(t.cycleMinutes);
+    const masterComplete=payloadLimit!==null&&bedCapacity!==null&&cycleTime!==null;
+    return {
+      truck_id:t.id,plate_number:t.plate||null,
+      payload_limit_t:payloadLimit,bed_capacity_m3:bedCapacity,cycle_time_minutes:cycleTime,
+      active:t.active===true?true:t.active===false?false:null,
+      busy:hasOpenTrip,
+      availability:t.active===false?'INACTIVE':!active||!masterComplete?'PENDING_VERIFICATION':hasOpenTrip?'BUSY':'AVAILABLE',
+    };
+  });
+  const lines=(request.lines||[]).map(line=>{
+    const product=(s.products||[]).find(x=>x.id===line.skuId);
+    const density=product?.densityVerified===true?positiveFinite(product.densityTPerM3):null;
+    const densityVerified=density!==null;
+    const truckCapacities=trucks.map(t=>({
+      truck_id:t.truck_id,
+      effective_capacity_t:densityVerified&&t.active===true&&t.payload_limit_t!==null&&t.bed_capacity_m3!==null
+        ?Math.min(t.payload_limit_t,t.bed_capacity_m3*density):null,
+    }));
+    const availableCapacity=truckCapacities.reduce((max,x)=>x.effective_capacity_t===null||trucks.find(t=>t.truck_id===x.truck_id)?.availability!=='AVAILABLE'?max:Math.max(max,x.effective_capacity_t),0);
+    return {
+      sku_id:line.skuId,requested_quantity:line.quantity,unit:line.unit,
+      quantity_source:'REQUESTED_UNVERIFIED',
+      density_status:densityVerified?'VERIFIED':'PENDING_VERIFICATION',
+      truck_capacities:truckCapacities,
+      effective_capacity_t:availableCapacity||null,
+      estimated_trips:null,
+    };
+  });
+  const reasons=['LAND_DESTINATION_UNVERIFIED','DRIVER_INTEGRATION_UNAVAILABLE','LAND_EXECUTION_NOT_INTEGRATED'];
+  if(lines.some(x=>x.density_status!=='VERIFIED'))reasons.push('SKU_DENSITY_UNVERIFIED');
+  if(trucks.some(x=>x.availability==='PENDING_VERIFICATION'))reasons.push('TRUCK_MASTER_INCOMPLETE');
+  const availableTrucks=trucks.filter(x=>x.availability==='AVAILABLE').length;
+  if(!availableTrucks)reasons.push('NO_AVAILABLE_TRUCKS');
+  const pendingTruckData=trucks.some(x=>x.availability==='PENDING_VERIFICATION');
+  return {
+    request_id:request.id,transfer_mode:'LAND',destination_id:request.destinationId??null,
+    destination_name:request.destination??null,source:'LEGACY_MASTER_SNAPSHOT',
+    data_mode:s.dataMode||'UNKNOWN',
+    status:availableTrucks||pendingTruckData?'PENDING_VERIFICATION':'INSUFFICIENT',
+    requested_quantity:lines.map(({sku_id,requested_quantity,unit})=>({sku_id,requested_quantity,unit})),
+    available_trucks:availableTrucks,eligible_trucks:0,recommended_trucks:[],
+    estimated_trips:null,
+    busy_trucks:trucks.filter(x=>x.busy).length,
+    trucks,lines,assigned_driver_id:null,driver_status:'PENDING_VERIFICATION',
+    reasons,operational_dispatch_enabled:false,
+  };
+}
+
 function createMeasurement(s,p,u){
+  if(u?.role!=='stock')fail('Hanya operator Stockpile dapat mengajukan pengukuran.','FORBIDDEN',403);
   const stock=get(s,'stockpiles',p.stockpileId);scope(u,'stock',stock.crusherId);if(!stock.active||!get(s,'crushers',stock.crusherId).active||!get(s,'products',stock.skuId).active)fail('Stockpile, crusher, atau SKU sudah nonaktif.');if(p.skuId&&p.skuId!==stock.skuId)fail('SKU harus sama dengan master stockpile.');
   const method=p.method||'camera_pending';if(!['manual','calibrated_geometry','camera_pending'].includes(method))fail('Metode pengukuran tidak dikenal.');
   let volumeM3=null,geometry=null;
@@ -122,6 +240,7 @@ export function applyAction(s,action,p={},u){
   if(!u?.id||!['admin','stock','jetty'].includes(u.role))fail('Sesi pengguna tidak valid.','UNAUTHORIZED',401);
   if(typeof action!=='string')fail('Tindakan wajib diisi.');let result;
   if(/^master\.(product|crusher|stockpile|truck|jetty|vessel)\.save$/.test(action))result=saveMaster(s,action.split('.')[1],p,u);
+  else if(/^master\.(product|crusher|stockpile|truck|jetty|vessel)\.delete$/.test(action))result=deleteMaster(s,action.split('.')[1],p,u);
   else if(action==='request.create')result=createRequest(s,p,u);
   else if(action==='request.plan')result=planRequest(s,p,u);
   else if(action.startsWith('trip.'))result=moveTrip(s,action.slice(5),p,u);
@@ -135,14 +254,18 @@ export function applyAction(s,action,p={},u){
 export function publicState(s,u){
   const view=structuredClone(s);
   if(u.role==='stock'){
-    const ids=new Set(u.crusherIds||[]);view.crushers=view.crushers.filter(x=>ids.has(x.id));view.stockpiles=view.stockpiles.filter(x=>ids.has(x.crusherId));view.trips=view.trips.filter(x=>ids.has(x.crusherId));view.dispatches=view.dispatches.filter(x=>ids.has(x.crusherId));view.measurements=view.measurements.filter(x=>ids.has(x.crusherId));const requests=new Set(view.dispatches.map(x=>x.requestId));view.requests=view.requests.filter(x=>requests.has(x.id));const stocks=new Set(view.stockpiles.map(x=>x.id));view.inventoryLedger=view.inventoryLedger.filter(x=>stocks.has(x.stockpileId));
+    const ids=new Set(u.crusherIds||[]);view.crushers=view.crushers.filter(x=>ids.has(x.id));view.stockpiles=view.stockpiles.filter(x=>ids.has(x.crusherId));view.trips=view.trips.filter(x=>ids.has(x.crusherId));view.measurements=view.measurements.filter(x=>ids.has(x.crusherId));const stocks=new Set(view.stockpiles.map(x=>x.id));view.inventoryLedger=view.inventoryLedger.filter(x=>stocks.has(x.stockpileId));
+    const trucks=new Set(view.trips.map(x=>x.truckId)),jetties=new Set(view.trips.map(x=>x.jettyId)),vessels=new Set(view.trips.map(x=>x.vesselId)),products=new Set([...view.stockpiles,...view.trips].map(x=>x.skuId));
+    view.trucks=view.trucks.filter(x=>trucks.has(x.id));view.jetties=view.jetties.filter(x=>jetties.has(x.id));view.vessels=view.vessels.filter(x=>vessels.has(x.id));view.products=view.products.filter(x=>products.has(x.id));
+    // Pickup operators need assigned trips, not Admin transfer or dispatch plans.
+    view.requests=[];view.dispatches=[];
   }else if(u.role==='jetty'){
     const ids=new Set(u.jettyIds||[]);view.jetties=view.jetties.filter(x=>ids.has(x.id));view.vessels=view.vessels.filter(x=>ids.has(x.jettyId));view.trips=view.trips.filter(x=>ids.has(x.jettyId));view.dispatches=view.dispatches.filter(x=>ids.has(x.jettyId));view.requests=view.requests.filter(x=>ids.has(x.jettyId));view.measurements=[];view.inventoryLedger=[];
   }
   if(u.role!=='admin'){const visible=new Set([...view.stockpiles,...view.trips,...view.dispatches,...view.requests,...view.measurements].map(x=>x.id));view.events=view.events.filter(x=>visible.has(x.entityId));view.erpOutbox=view.erpOutbox.filter(x=>visible.has(x.entityId));}
-  view.trucks=view.trucks.map(t=>metricsForTruck(s,t));
+  view.trucks=view.trucks.map(t=>metricsForTruck(u.role==='stock'?view:s,t));
   const sum=(arr,key)=>r(arr.reduce((a,x)=>a+(x[key]||0),0));const activeTrips=view.trips.filter(t=>activeStatuses.has(t.status));
-  view.metrics={onHandM3:sum(view.stockpiles,'onHandM3'),reservedM3:sum(view.stockpiles,'reservedM3'),availableM3:r(sum(view.stockpiles,'onHandM3')-sum(view.stockpiles,'reservedM3')),inTransitM3:sum(view.trips.filter(t=>['in_transit','arrived'].includes(t.status)),'volumeM3'),deliveredM3:sum(view.trips.filter(t=>['unloaded','returned'].includes(t.status)),'volumeM3'),deliveredT:sum(view.trips.filter(t=>['unloaded','returned'].includes(t.status)),'tonnageT'),availableTrucks:view.trucks.filter(t=>t.status==='available').length,busyTrucks:view.trucks.filter(t=>t.status==='busy').length,activeTrips:activeTrips.length,queuedTrips:view.trips.filter(t=>t.status==='queued').length,completedTrips:view.trips.filter(t=>['unloaded','returned'].includes(t.status)).length,openRequests:view.requests.filter(t=>t.status!=='completed').length,pendingMeasurements:view.measurements.filter(m=>m.status==='pending').length,erpPending:view.erpOutbox.length};
+  view.metrics={onHandM3:sum(view.stockpiles,'onHandM3'),reservedM3:sum(view.stockpiles,'reservedM3'),availableM3:r(sum(view.stockpiles,'onHandM3')-sum(view.stockpiles,'reservedM3')),inTransitM3:sum(view.trips.filter(t=>['in_transit','arrived'].includes(t.status)),'volumeM3'),deliveredM3:sum(view.trips.filter(t=>['unloaded','returned'].includes(t.status)),'volumeM3'),deliveredT:sum(view.trips.filter(t=>['unloaded','returned'].includes(t.status)),'tonnageT'),availableTrucks:view.trucks.filter(t=>t.status==='available').length,busyTrucks:view.trucks.filter(t=>t.status==='busy').length,allocatedTrucks:view.trucks.filter(t=>t.status==='allocated').length,activeTrips:activeTrips.length,queuedTrips:view.trips.filter(t=>t.status==='queued').length,completedTrips:view.trips.filter(t=>['unloaded','returned'].includes(t.status)).length,openRequests:view.requests.filter(t=>t.status!=='completed').length,pendingMeasurements:view.measurements.filter(m=>m.status==='pending').length,erpPending:view.erpOutbox.length};
   view.products=view.products.map(p=>({...p,onHandM3:sum(view.stockpiles.filter(x=>x.skuId===p.id),'onHandM3'),reservedM3:sum(view.stockpiles.filter(x=>x.skuId===p.id),'reservedM3')}));
   for(const stock of view.stockpiles)stock.availableM3=r(stock.onHandM3-stock.reservedM3);
   for(const vessel of view.vessels)vessel.remainingT=r(vessel.payloadLimitT-vessel.loadedT-vessel.reservedT);

@@ -1,0 +1,399 @@
+{
+  "generated_at": "2026-11-06T09:18:14.498Z",
+  "source": "REPOSITORY_STATIC_CONTRACT_REVIEW",
+  "evidence": {
+    "source_evidence_claims_complete": false,
+    "independently_verified": false,
+    "final_api_locked": false,
+    "frontend_migration_allowed": false,
+    "production_cutover_allowed": false,
+    "missing": [
+      "inventory.stockpile_sku_mapping",
+      "inventory.physical_measurement",
+      "inventory.mass_unit_t",
+      "inventory.measurement_method",
+      "inventory.measurement_time",
+      "inventory.evidence_digest",
+      "inventory.independent_stock_approval",
+      "inventory.opening_ledger_reconciliation",
+      "weighbridge.vendor_protocol_manual",
+      "weighbridge.device_identity",
+      "weighbridge.real_redacted_event_examples",
+      "weighbridge.qr_tare_gross_semantics",
+      "weighbridge.calibration_record",
+      "weighbridge.source_authentication",
+      "weighbridge.retry_and_offline_policy",
+      "weighbridge.independent_vendor_approval",
+      "driver.authoritative_identity_provider",
+      "driver.driver_registry_mapping",
+      "driver.assignment_source",
+      "driver.role_and_location_scope",
+      "driver.deprovision_policy",
+      "driver.independent_identity_approval",
+      "api.page_to_endpoint_matrix",
+      "api.dto_schema_review",
+      "api.nullable_and_unit_semantics",
+      "api.state_and_exception_matrix",
+      "api.auth_and_idempotency_review",
+      "api.frontend_backend_owner_signoff",
+      "api.integration_uat_proof"
+    ],
+    "untrusted": [],
+    "verdict": "EVIDENCE_INCOMPLETE",
+    "explanation": "Self-declared references cannot substitute for actual file authentication, signed operational approval and owner validation."
+  },
+  "contract": {
+    "contract_version": "1.0-candidate",
+    "accepted": false,
+    "production_cutover_allowed": false,
+    "frontend_migration_allowed": false,
+    "unresolved": [
+      {
+        "id": "API-001",
+        "description": "Legacy /api/v1/dispatches DTO lacks target allocation, mode, voyage and verified sequence evidence"
+      },
+      {
+        "id": "API-002",
+        "description": "Target multi-line Transfer Requests and destination allocation DTO are not fully implemented"
+      },
+      {
+        "id": "API-003",
+        "description": "Target Driver tasks/checklist and authenticated production assignment lifecycle missing"
+      },
+      {
+        "id": "API-004",
+        "description": "Weighbridge vendor-native protocol, trust chain, fault evidence and managed secret rotation not validated"
+      },
+      {
+        "id": "API-005",
+        "description": "Full inventory reconciliation and opening proof must be independently signed and imported"
+      },
+      {
+        "id": "API-006",
+        "description": "Exceptions shortfall, cancellation, skip/override, recovery DTO missing"
+      },
+      {
+        "id": "API-007",
+        "description": "Outbox publisher, SSE, cache invalidation and historical pagination need integration"
+      },
+      {
+        "id": "API-008",
+        "description": "Voyage completion, jetty cargo handoff and final destination custody DTO missing"
+      },
+      {
+        "id": "API-009",
+        "description": "Normalized production schema migration and rollback not approved"
+      },
+      {
+        "id": "API-010",
+        "description": "Final comprehensive OpenAPI 3.1 schema review, signed client-server contract and security acceptance pending"
+      }
+    ]
+  },
+  "counts": {
+    "total_page_contracts": 16,
+    "route_candidates": 8,
+    "unmapped": 8,
+    "unresolved_api_gaps": 10
+  },
+  "pages": [
+    {
+      "role": "ADMIN",
+      "page": "overview",
+      "endpoint": "/api/v1/operations/overview",
+      "method": "GET",
+      "route_candidate": true,
+      "fields": [
+        "as_of",
+        "active_dispatches",
+        "active_trips",
+        "needs_attention",
+        "inventory_summary",
+        "fleet_summary"
+      ],
+      "required_permissions": [
+        "operations.read"
+      ],
+      "agreement": "CANDIDATE_REQUIRES_DTO_SIGNOFF"
+    },
+    {
+      "role": "ADMIN",
+      "page": "transfers",
+      "endpoint": "/api/v1/transfer-requests",
+      "method": "GET",
+      "route_candidate": false,
+      "fields": [
+        "id",
+        "code",
+        "status",
+        "lines",
+        "destination_allocations",
+        "created_at"
+      ],
+      "required_permissions": [
+        "transfer.read"
+      ],
+      "agreement": "NOT_IMPLEMENTED_OR_NOT_MATCHING"
+    },
+    {
+      "role": "ADMIN",
+      "page": "dispatchPlanning",
+      "endpoint": "/api/v1/dispatches",
+      "method": "GET",
+      "route_candidate": true,
+      "fields": [
+        "id",
+        "mode",
+        "status",
+        "allocation_id",
+        "source_stockpile_id",
+        "voyage_id",
+        "planned_quantity_t"
+      ],
+      "required_permissions": [
+        "dispatch.plan"
+      ],
+      "agreement": "CANDIDATE_REQUIRES_DTO_SIGNOFF"
+    },
+    {
+      "role": "ADMIN",
+      "page": "dispatchMonitoring",
+      "endpoint": "/api/v1/dispatches",
+      "method": "GET",
+      "route_candidate": true,
+      "fields": [
+        "id",
+        "mode",
+        "status",
+        "trips",
+        "sequence_eligibility",
+        "active_resource_claims"
+      ],
+      "required_permissions": [
+        "dispatch.read"
+      ],
+      "agreement": "CANDIDATE_REQUIRES_DTO_SIGNOFF"
+    },
+    {
+      "role": "ADMIN",
+      "page": "inventory",
+      "endpoint": "/api/v1/inventory",
+      "method": "GET",
+      "route_candidate": true,
+      "fields": [
+        "stockpile_id",
+        "sku_id",
+        "on_hand_t",
+        "reserved_t",
+        "available_t",
+        "as_of"
+      ],
+      "required_permissions": [
+        "inventory.read"
+      ],
+      "agreement": "CANDIDATE_REQUIRES_DTO_SIGNOFF"
+    },
+    {
+      "role": "ADMIN",
+      "page": "exceptions",
+      "endpoint": "/api/v1/exceptions",
+      "method": "GET",
+      "route_candidate": false,
+      "fields": [
+        "id",
+        "status",
+        "severity",
+        "reference_id",
+        "recovery_action"
+      ],
+      "required_permissions": [
+        "exception.read"
+      ],
+      "agreement": "NOT_IMPLEMENTED_OR_NOT_MATCHING"
+    },
+    {
+      "role": "ADMIN",
+      "page": "masterData",
+      "endpoint": "/api/v1/master-data",
+      "method": "GET",
+      "route_candidate": false,
+      "fields": [
+        "skus",
+        "locations",
+        "stockpiles",
+        "trucks",
+        "drivers",
+        "vessels",
+        "voyages"
+      ],
+      "required_permissions": [
+        "master.read"
+      ],
+      "agreement": "NOT_IMPLEMENTED_OR_NOT_MATCHING"
+    },
+    {
+      "role": "ADMIN",
+      "page": "auditIntegration",
+      "endpoint": "/api/v1/operational-events",
+      "method": "GET",
+      "route_candidate": false,
+      "fields": [
+        "event_id",
+        "event_type",
+        "aggregate_id",
+        "occurred_at",
+        "source_system"
+      ],
+      "required_permissions": [
+        "audit.read"
+      ],
+      "agreement": "NOT_IMPLEMENTED_OR_NOT_MATCHING"
+    },
+    {
+      "role": "STOCKPILE",
+      "page": "home",
+      "endpoint": "/api/v1/stockpile/me/pickups",
+      "method": "GET",
+      "route_candidate": false,
+      "fields": [
+        "location_id",
+        "expected_pickups",
+        "stock_summary",
+        "as_of"
+      ],
+      "required_permissions": [
+        "stockpile.read"
+      ],
+      "agreement": "NOT_IMPLEMENTED_OR_NOT_MATCHING"
+    },
+    {
+      "role": "STOCKPILE",
+      "page": "inventory",
+      "endpoint": "/api/v1/inventory",
+      "method": "GET",
+      "route_candidate": true,
+      "fields": [
+        "stockpile_id",
+        "sku_id",
+        "on_hand_t",
+        "reserved_t",
+        "available_t",
+        "as_of"
+      ],
+      "required_permissions": [
+        "inventory.read.scoped"
+      ],
+      "agreement": "CANDIDATE_REQUIRES_DTO_SIGNOFF"
+    },
+    {
+      "role": "STOCKPILE",
+      "page": "pickups",
+      "endpoint": "/api/v1/stockpile/me/pickups",
+      "method": "GET",
+      "route_candidate": false,
+      "fields": [
+        "trip_id",
+        "truck_identifier",
+        "sku_id",
+        "planned_quantity_t",
+        "status"
+      ],
+      "required_permissions": [
+        "stockpile.pickup.read"
+      ],
+      "agreement": "NOT_IMPLEMENTED_OR_NOT_MATCHING"
+    },
+    {
+      "role": "STOCKPILE",
+      "page": "activity",
+      "endpoint": "/api/v1/stockpile/me/receipts",
+      "method": "GET",
+      "route_candidate": false,
+      "fields": [
+        "trip_id",
+        "destination_location_id",
+        "receipt_status",
+        "received_quantity_t"
+      ],
+      "required_permissions": [
+        "delivery.read.scoped"
+      ],
+      "agreement": "NOT_IMPLEMENTED_OR_NOT_MATCHING"
+    },
+    {
+      "role": "DRIVER",
+      "page": "home",
+      "endpoint": "/api/v1/driver/me/active-trip",
+      "method": "GET",
+      "route_candidate": true,
+      "fields": [
+        "trip_id",
+        "assignment_id",
+        "truck_id",
+        "current_state",
+        "next_action",
+        "source_location_id",
+        "destination_location_id"
+      ],
+      "required_permissions": [
+        "driver.trip.read.self"
+      ],
+      "agreement": "CANDIDATE_REQUIRES_DTO_SIGNOFF"
+    },
+    {
+      "role": "DRIVER",
+      "page": "tasks",
+      "endpoint": "/api/v1/driver/trips/{tripId}/checklist",
+      "method": "GET",
+      "route_candidate": false,
+      "fields": [
+        "trip_id",
+        "checklist_items",
+        "responses",
+        "completion_status"
+      ],
+      "required_permissions": [
+        "driver.checklist.read.self"
+      ],
+      "agreement": "NOT_IMPLEMENTED_OR_NOT_MATCHING"
+    },
+    {
+      "role": "DRIVER",
+      "page": "history",
+      "endpoint": "/api/v1/driver/me/trips",
+      "method": "GET",
+      "route_candidate": true,
+      "fields": [
+        "trip_id",
+        "dispatch_id",
+        "final_state",
+        "started_at",
+        "returned_available_at"
+      ],
+      "required_permissions": [
+        "driver.trip.read.self"
+      ],
+      "agreement": "CANDIDATE_REQUIRES_DTO_SIGNOFF"
+    },
+    {
+      "role": "DRIVER",
+      "page": "profile",
+      "endpoint": "/api/v1/session",
+      "method": "GET",
+      "route_candidate": true,
+      "fields": [
+        "user_id",
+        "role",
+        "driver_id",
+        "permissions"
+      ],
+      "required_permissions": [
+        "session.read"
+      ],
+      "agreement": "CANDIDATE_REQUIRES_DTO_SIGNOFF"
+    }
+  ],
+  "final_acceptance_status": "BLOCKED",
+  "frontend_migration_allowed": false,
+  "note": "Candidate route match does not mean response DTO field parity or deployment. All approvals are external."
+}

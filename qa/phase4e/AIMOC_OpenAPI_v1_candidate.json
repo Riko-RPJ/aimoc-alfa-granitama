@@ -1,0 +1,2638 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "AIMOC API v1 — Candidate",
+    "version": "1.0-candidate",
+    "description": "NOT PRODUCTION ACCEPTED. This document describes staging + legacy compatibility routes. It does not approve real vendor, inventory evidence or final DTO parity."
+  },
+  "x-aimoc-production-accepted": false,
+  "x-aimoc-frontend-migration-allowed": false,
+  "x-aimoc-open-gaps": [
+    {
+      "id": "API-001",
+      "description": "Legacy /api/v1/dispatches DTO lacks target allocation, mode, voyage and verified sequence evidence"
+    },
+    {
+      "id": "API-002",
+      "description": "Target multi-line Transfer Requests and destination allocation DTO are not fully implemented"
+    },
+    {
+      "id": "API-003",
+      "description": "Target Driver tasks/checklist and authenticated production assignment lifecycle missing"
+    },
+    {
+      "id": "API-004",
+      "description": "Weighbridge vendor-native protocol, trust chain, fault evidence and managed secret rotation not validated"
+    },
+    {
+      "id": "API-005",
+      "description": "Full inventory reconciliation and opening proof must be independently signed and imported"
+    },
+    {
+      "id": "API-006",
+      "description": "Exceptions shortfall, cancellation, skip/override, recovery DTO missing"
+    },
+    {
+      "id": "API-007",
+      "description": "Outbox publisher, SSE, cache invalidation and historical pagination need integration"
+    },
+    {
+      "id": "API-008",
+      "description": "Voyage completion, jetty cargo handoff and final destination custody DTO missing"
+    },
+    {
+      "id": "API-009",
+      "description": "Normalized production schema migration and rollback not approved"
+    },
+    {
+      "id": "API-010",
+      "description": "Final comprehensive OpenAPI 3.1 schema review, signed client-server contract and security acceptance pending"
+    }
+  ],
+  "paths": {
+    "/api/v1/session": {
+      "get": {
+        "operationId": "session",
+        "tags": [
+          "identity"
+        ],
+        "summary": "session",
+        "description": "Candidate route. Not production activated.",
+        "x-aimoc-roles": [
+          "admin",
+          "stock",
+          "jetty",
+          "driver"
+        ],
+        "x-aimoc-implementation": "legacy-compatibility",
+        "responses": {
+          "200": {
+            "description": "Envelope with explicit provenance and data status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Role/scope denied"
+          },
+          "409": {
+            "description": "State conflict; no assumed success"
+          },
+          "501": {
+            "description": "Unavailable in normal application"
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/inventory": {
+      "get": {
+        "operationId": "inventory_read",
+        "tags": [
+          "inventory"
+        ],
+        "summary": "inventory read",
+        "description": "Legacy inventory snapshot projected with exact m3 provenance; actual tonnage is null until verified.",
+        "x-aimoc-roles": [
+          "admin",
+          "stock"
+        ],
+        "x-aimoc-implementation": "legacy-compatibility",
+        "responses": {
+          "200": {
+            "description": "Envelope with explicit provenance and data status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Role/scope denied"
+          },
+          "409": {
+            "description": "State conflict; no assumed success"
+          },
+          "501": {
+            "description": "Unavailable in normal application"
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/operations/overview": {
+      "get": {
+        "operationId": "overview_read",
+        "tags": [
+          "overview"
+        ],
+        "summary": "overview read",
+        "description": "Compatibility projection; unverified KPIs must stay null.",
+        "x-aimoc-roles": [
+          "admin"
+        ],
+        "x-aimoc-implementation": "legacy-compatibility",
+        "responses": {
+          "200": {
+            "description": "Envelope with explicit provenance and data status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Role/scope denied"
+          },
+          "409": {
+            "description": "State conflict; no assumed success"
+          },
+          "501": {
+            "description": "Unavailable in normal application"
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/dispatches": {
+      "get": {
+        "operationId": "dispatch_read",
+        "tags": [
+          "dispatch"
+        ],
+        "summary": "dispatch read",
+        "description": "Staging unified execution dispatch projection or legacy compatibility on normal app; production cutover not accepted.",
+        "x-aimoc-roles": [
+          "admin",
+          "stock"
+        ],
+        "x-aimoc-implementation": "isolated-staging",
+        "responses": {
+          "200": {
+            "description": "Envelope with explicit provenance and data status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Role/scope denied"
+          },
+          "409": {
+            "description": "State conflict; no assumed success"
+          },
+          "501": {
+            "description": "Unavailable in normal application"
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          }
+        ]
+      },
+      "post": {
+        "operationId": "dispatch_create",
+        "tags": [
+          "dispatch"
+        ],
+        "summary": "dispatch create",
+        "description": "Atomic staging dispatch, trips, Driver+truck assignments and crusher reference; reservation remains separate.",
+        "x-aimoc-roles": [
+          "admin"
+        ],
+        "x-aimoc-implementation": "isolated-staging",
+        "responses": {
+          "200": {
+            "description": "Envelope with explicit provenance and data status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Role/scope denied"
+          },
+          "409": {
+            "description": "State conflict; no assumed success"
+          },
+          "501": {
+            "description": "Unavailable in normal application"
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 6
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "dispatch_id",
+                  "mode",
+                  "source_stockpile_id",
+                  "destination_location_id",
+                  "sku_id",
+                  "planned_quantity_t",
+                  "crusher_id",
+                  "loading_point_id",
+                  "trips"
+                ],
+                "properties": {
+                  "dispatch_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
+                  },
+                  "mode": {
+                    "enum": [
+                      "LAND",
+                      "MARINE"
+                    ]
+                  },
+                  "source_stockpile_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
+                  },
+                  "destination_location_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
+                  },
+                  "sku_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
+                  },
+                  "planned_quantity_t": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9][0-9]{0,9})(\\.[0-9]{1,6})?$",
+                    "description": "Exact tonnes as decimal string, not m3"
+                  },
+                  "crusher_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
+                  },
+                  "loading_point_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
+                  },
+                  "voyage_id": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 120
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "jetty_window_id": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 120
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "trips": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 50,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "trip_id",
+                        "assignment_id",
+                        "sequence_no",
+                        "driver_id",
+                        "truck_id",
+                        "planned_quantity_t"
+                      ],
+                      "properties": {
+                        "trip_id": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
+                        },
+                        "assignment_id": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
+                        },
+                        "sequence_no": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "driver_id": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
+                        },
+                        "truck_id": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
+                        },
+                        "planned_quantity_t": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]{0,9})(\\.[0-9]{1,6})?$",
+                          "description": "Exact tonnes as decimal string, not m3"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dispatch/planning-options": {
+      "get": {
+        "operationId": "planning_options",
+        "tags": [
+          "dispatch"
+        ],
+        "summary": "planning options",
+        "description": "Candidate route. Not production activated.",
+        "x-aimoc-roles": [
+          "admin"
+        ],
+        "x-aimoc-implementation": "isolated-staging",
+        "responses": {
+          "200": {
+            "description": "Envelope with explicit provenance and data status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Role/scope denied"
+          },
+          "409": {
+            "description": "State conflict; no assumed success"
+          },
+          "501": {
+            "description": "Unavailable in normal application"
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/trips": {
+      "get": {
+        "operationId": "trip_monitoring",
+        "tags": [
+          "trips"
+        ],
+        "summary": "trip monitoring",
+        "description": "Candidate route. Not production activated.",
+        "x-aimoc-roles": [
+          "admin",
+          "stock"
+        ],
+        "x-aimoc-implementation": "isolated-staging",
+        "responses": {
+          "200": {
+            "description": "Envelope with explicit provenance and data status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Role/scope denied"
+          },
+          "409": {
+            "description": "State conflict; no assumed success"
+          },
+          "501": {
+            "description": "Unavailable in normal application"
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/stockpile/me/pickups": {
+      "get": {
+        "operationId": "stockpile_pickups",
+        "tags": [
+          "stockpile"
+        ],
+        "summary": "stockpile pickups",
+        "description": "Scoped pickup list. TARE_CONFIRMED mandatory before pickup acceptance.",
+        "x-aimoc-roles": [
+          "stock"
+        ],
+        "x-aimoc-implementation": "isolated-staging",
+        "responses": {
+          "200": {
+            "description": "Envelope with explicit provenance and data status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Role/scope denied"
+          },
+          "409": {
+            "description": "State conflict; no assumed success"
+          },
+          "501": {
+            "description": "Unavailable in normal application"
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/driver/me/active-trip": {
+      "get": {
+        "operationId": "driver_active",
+        "tags": [
+          "driver"
+        ],
+        "summary": "driver active",
+        "description": "Strict identity-scoped Driver assignment; Phase4E adds independent binding verification.",
+        "x-aimoc-roles": [
+          "driver"
+        ],
+        "x-aimoc-implementation": "isolated-staging",
+        "responses": {
+          "200": {
+            "description": "Envelope with explicit provenance and data status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Role/scope denied"
+          },
+          "409": {
+            "description": "State conflict; no assumed success"
+          },
+          "501": {
+            "description": "Unavailable in normal application"
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/driver/me/trips": {
+      "get": {
+        "operationId": "driver_history",
+        "tags": [
+          "driver"
+        ],
+        "summary": "driver history",
+        "description": "Candidate route. Not production activated.",
+        "x-aimoc-roles": [
+          "driver"
+        ],
+        "x-aimoc-implementation": "isolated-staging",
+        "responses": {
+          "200": {
+            "description": "Envelope with explicit provenance and data status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Role/scope denied"
+          },
+          "409": {
+            "description": "State conflict; no assumed success"
+          },
+          "501": {
+            "description": "Unavailable in normal application"
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/trips/{tripId}": {
+      "get": {
+        "operationId": "trip_detail",
+        "tags": [
+          "trips"
+        ],
+        "summary": "trip detail",
+        "description": "Staging normalized transaction read, role/driver assignment scoped.",
+        "x-aimoc-roles": [
+          "admin",
+          "stock",
+          "jetty",
+          "driver"
+        ],
+        "x-aimoc-implementation": "isolated-staging",
+        "responses": {
+          "200": {
+            "description": "Envelope with explicit provenance and data status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Role/scope denied"
+          },
+          "409": {
+            "description": "State conflict; no assumed success"
+          },
+          "501": {
+            "description": "Unavailable in normal application"
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tripId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/dispatches/{dispatchId}/assign-loading-point": {
+      "post": {
+        "operationId": "assign_loading_point",
+        "tags": [
+          "crusher-location"
+        ],
+        "summary": "assign loading point",
+        "description": "Candidate route. Not production activated.",
+        "x-aimoc-roles": [
+          "admin"
+        ],
+        "x-aimoc-implementation": "isolated-staging",
+        "responses": {
+          "200": {
+            "description": "Envelope with explicit provenance and data status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Role/scope denied"
+          },
+          "409": {
+            "description": "State conflict; no assumed success"
+          },
+          "501": {
+            "description": "Unavailable in normal application"
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 6
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "dispatchId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "crusher_id",
+                  "loading_point_id"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "crusher_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
+                  },
+                  "loading_point_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/trips/{tripId}/assign-driver": {
+      "post": {
+        "operationId": "assign_driver",
+        "tags": [
+          "driver"
+        ],
+        "summary": "assign driver",
+        "description": "Candidate route. Not production activated.",
+        "x-aimoc-roles": [
+          "admin"
+        ],
+        "x-aimoc-implementation": "isolated-staging",
+        "responses": {
+          "200": {
+            "description": "Envelope with explicit provenance and data status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Role/scope denied"
+          },
+          "409": {
+            "description": "State conflict; no assumed success"
+          },
+          "501": {
+            "description": "Unavailable in normal application"
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 6
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tripId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "assignment_id",
+                  "driver_id"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "assignment_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
+                  },
+                  "driver_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dispatches/{dispatchId}/reserve": {
+      "post": {
+        "operationId": "reserve",
+        "tags": [
+          "inventory"
+        ],
+        "summary": "reserve",
+        "description": "Reserve actual inventory; Phase4E requires approved opening stock and journal match.",
+        "x-aimoc-roles": [
+          "admin"
+        ],
+        "x-aimoc-implementation": "isolated-staging",
+        "responses": {
+          "200": {
+            "description": "Envelope with explicit provenance and data status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Role/scope denied"
+          },
+          "409": {
+            "description": "State conflict; no assumed success"
+          },
+          "501": {
+            "description": "Unavailable in normal application"
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 6
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "dispatchId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/trips/{tripId}/start": {
+      "post": {
+        "operationId": "start",
+        "tags": [
+          "dispatch"
+        ],
+        "summary": "start",
+        "description": "Candidate route. Not production activated.",
+        "x-aimoc-roles": [
+          "admin"
+        ],
+        "x-aimoc-implementation": "isolated-staging",
+        "responses": {
+          "200": {
+            "description": "Envelope with explicit provenance and data status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Role/scope denied"
+          },
+          "409": {
+            "description": "State conflict; no assumed success"
+          },
+          "501": {
+            "description": "Unavailable in normal application"
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 6
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tripId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/trips/{tripId}/hold": {
+      "post": {
+        "operationId": "hold",
+        "tags": [
+          "exceptions"
+        ],
+        "summary": "hold",
+        "description": "Candidate route. Not production activated.",
+        "x-aimoc-roles": [
+          "admin"
+        ],
+        "x-aimoc-implementation": "isolated-staging",
+        "responses": {
+          "200": {
+            "description": "Envelope with explicit provenance and data status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Role/scope denied"
+          },
+          "409": {
+            "description": "State conflict; no assumed success"
+          },
+          "501": {
+            "description": "Unavailable in normal application"
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 6
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tripId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "reason"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 8,
+                    "maxLength": 300
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/trips/{tripId}/resolve-hold": {
+      "post": {
+        "operationId": "resolve_hold",
+        "tags": [
+          "exceptions"
+        ],
+        "summary": "resolve hold",
+        "description": "Candidate route. Not production activated.",
+        "x-aimoc-roles": [
+          "admin"
+        ],
+        "x-aimoc-implementation": "isolated-staging",
+        "responses": {
+          "200": {
+            "description": "Envelope with explicit provenance and data status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Role/scope denied"
+          },
+          "409": {
+            "description": "State conflict; no assumed success"
+          },
+          "501": {
+            "description": "Unavailable in normal application"
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 6
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tripId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "resolution_note"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "resolution_note": {
+                    "type": "string",
+                    "minLength": 8,
+                    "maxLength": 300
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/trips/{tripId}/accept-pickup": {
+      "post": {
+        "operationId": "accept_pickup",
+        "tags": [
+          "stockpile"
+        ],
+        "summary": "accept pickup",
+        "description": "Stockpile authorizes loading after a signed independently ingested QR/TARE sequence. No Driver self-approval.",
+        "x-aimoc-roles": [
+          "stock"
+        ],
+        "x-aimoc-implementation": "isolated-staging",
+        "responses": {
+          "200": {
+            "description": "Envelope with explicit provenance and data status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Role/scope denied"
+          },
+          "409": {
+            "description": "State conflict; no assumed success"
+          },
+          "501": {
+            "description": "Unavailable in normal application"
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 6
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tripId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/trips/{tripId}/loading": {
+      "post": {
+        "operationId": "loading",
+        "tags": [
+          "weighing"
+        ],
+        "summary": "loading",
+        "description": "Candidate route. Not production activated.",
+        "x-aimoc-roles": [
+          "admin",
+          "stock"
+        ],
+        "x-aimoc-implementation": "isolated-staging",
+        "responses": {
+          "200": {
+            "description": "Envelope with explicit provenance and data status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Role/scope denied"
+          },
+          "409": {
+            "description": "State conflict; no assumed success"
+          },
+          "501": {
+            "description": "Unavailable in normal application"
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 6
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tripId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/trips/{tripId}/depart": {
+      "post": {
+        "operationId": "depart",
+        "tags": [
+          "inventory"
+        ],
+        "summary": "depart",
+        "description": "Candidate route. Not production activated.",
+        "x-aimoc-roles": [
+          "admin",
+          "stock"
+        ],
+        "x-aimoc-implementation": "isolated-staging",
+        "responses": {
+          "200": {
+            "description": "Envelope with explicit provenance and data status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Role/scope denied"
+          },
+          "409": {
+            "description": "State conflict; no assumed success"
+          },
+          "501": {
+            "description": "Unavailable in normal application"
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 6
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tripId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/trips/{tripId}/arrive": {
+      "post": {
+        "operationId": "arrive",
+        "tags": [
+          "custody"
+        ],
+        "summary": "arrive",
+        "description": "Candidate route. Not production activated.",
+        "x-aimoc-roles": [
+          "admin",
+          "stock",
+          "jetty"
+        ],
+        "x-aimoc-implementation": "isolated-staging",
+        "responses": {
+          "200": {
+            "description": "Envelope with explicit provenance and data status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Role/scope denied"
+          },
+          "409": {
+            "description": "State conflict; no assumed success"
+          },
+          "501": {
+            "description": "Unavailable in normal application"
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 6
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tripId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/trips/{tripId}/receive": {
+      "post": {
+        "operationId": "receive",
+        "tags": [
+          "custody"
+        ],
+        "summary": "receive",
+        "description": "Candidate route. Not production activated.",
+        "x-aimoc-roles": [
+          "admin",
+          "stock",
+          "jetty"
+        ],
+        "x-aimoc-implementation": "isolated-staging",
+        "responses": {
+          "200": {
+            "description": "Envelope with explicit provenance and data status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Role/scope denied"
+          },
+          "409": {
+            "description": "State conflict; no assumed success"
+          },
+          "501": {
+            "description": "Unavailable in normal application"
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 6
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tripId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "received_t",
+                  "external_receipt_id"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "received_t": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9][0-9]{0,9})(\\.[0-9]{1,6})?$",
+                    "description": "Exact tonnes as decimal string, not m3"
+                  },
+                  "external_receipt_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/trips/{tripId}/finalize-unload": {
+      "post": {
+        "operationId": "finalize_unload",
+        "tags": [
+          "custody"
+        ],
+        "summary": "finalize unload",
+        "description": "Candidate route. Not production activated.",
+        "x-aimoc-roles": [
+          "admin",
+          "stock",
+          "jetty"
+        ],
+        "x-aimoc-implementation": "isolated-staging",
+        "responses": {
+          "200": {
+            "description": "Envelope with explicit provenance and data status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Role/scope denied"
+          },
+          "409": {
+            "description": "State conflict; no assumed success"
+          },
+          "501": {
+            "description": "Unavailable in normal application"
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 6
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tripId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/trips/{tripId}/checklist": {
+      "post": {
+        "operationId": "driver_checklist",
+        "tags": [
+          "driver"
+        ],
+        "summary": "driver checklist",
+        "description": "Candidate route. Not production activated.",
+        "x-aimoc-roles": [
+          "driver"
+        ],
+        "x-aimoc-implementation": "isolated-staging",
+        "responses": {
+          "200": {
+            "description": "Envelope with explicit provenance and data status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Role/scope denied"
+          },
+          "409": {
+            "description": "State conflict; no assumed success"
+          },
+          "501": {
+            "description": "Unavailable in normal application"
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 6
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tripId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "item_id",
+                  "status"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "item_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
+                  },
+                  "status": {
+                    "enum": [
+                      "DONE",
+                      "ISSUE"
+                    ]
+                  },
+                  "note": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 500
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/trips/{tripId}/return-start": {
+      "post": {
+        "operationId": "driver_return",
+        "tags": [
+          "driver"
+        ],
+        "summary": "driver return",
+        "description": "Candidate route. Not production activated.",
+        "x-aimoc-roles": [
+          "driver"
+        ],
+        "x-aimoc-implementation": "isolated-staging",
+        "responses": {
+          "200": {
+            "description": "Envelope with explicit provenance and data status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Role/scope denied"
+          },
+          "409": {
+            "description": "State conflict; no assumed success"
+          },
+          "501": {
+            "description": "Unavailable in normal application"
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 6
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tripId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/trips/{tripId}/verify-return-evidence": {
+      "post": {
+        "operationId": "return_evidence",
+        "tags": [
+          "driver"
+        ],
+        "summary": "return evidence",
+        "description": "Independent return evidence; Driver self-report is insufficient.",
+        "x-aimoc-roles": [
+          "admin",
+          "stock"
+        ],
+        "x-aimoc-implementation": "isolated-staging",
+        "responses": {
+          "200": {
+            "description": "Envelope with explicit provenance and data status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Role/scope denied"
+          },
+          "409": {
+            "description": "State conflict; no assumed success"
+          },
+          "501": {
+            "description": "Unavailable in normal application"
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 6
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tripId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "source_event_id",
+                  "vehicle_ready"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "source_event_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
+                  },
+                  "vehicle_ready": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/trips/{tripId}/complete-return": {
+      "post": {
+        "operationId": "return_complete",
+        "tags": [
+          "driver"
+        ],
+        "summary": "return complete",
+        "description": "Candidate route. Not production activated.",
+        "x-aimoc-roles": [
+          "admin",
+          "stock"
+        ],
+        "x-aimoc-implementation": "isolated-staging",
+        "responses": {
+          "200": {
+            "description": "Envelope with explicit provenance and data status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Role/scope denied"
+          },
+          "409": {
+            "description": "State conflict; no assumed success"
+          },
+          "501": {
+            "description": "Unavailable in normal application"
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 6
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tripId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/integrations/weighbridge/events": {
+      "post": {
+        "operationId": "weighbridge",
+        "tags": [
+          "weighbridge"
+        ],
+        "summary": "weighbridge",
+        "description": "Signed M2M event only. Vendor protocol readiness, authenticated source and ordering required.",
+        "x-aimoc-roles": [
+          "m2m"
+        ],
+        "x-aimoc-implementation": "isolated-staging",
+        "responses": {
+          "202": {
+            "description": "Envelope with explicit provenance and data status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Role/scope denied"
+          },
+          "409": {
+            "description": "State conflict; no assumed success"
+          },
+          "501": {
+            "description": "Unavailable in normal application"
+          }
+        },
+        "security": [
+          {
+            "WeighbridgeSignature": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-AIMOC-Source",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-AIMOC-Timestamp",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-AIMOC-Signature",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WeighbridgeEvent"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "SessionCookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "aimoc_session"
+      },
+      "WeighbridgeSignature": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-AIMOC-Signature",
+        "description": "HMAC-SHA256 over timestamp+newline+unmodified body, bound to managed source ID; not a stand-alone device identity"
+      }
+    },
+    "schemas": {
+      "Envelope": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "resource",
+          "source",
+          "data_status",
+          "as_of",
+          "data"
+        ],
+        "properties": {
+          "schema_version": {
+            "const": "1.0"
+          },
+          "resource": {
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "V1_STAGING",
+              "LEGACY_SNAPSHOT",
+              "NOT_INTEGRATED",
+              "LOCAL_UAT"
+            ]
+          },
+          "data_status": {
+            "enum": [
+              "READY",
+              "EMPTY",
+              "STALE",
+              "NOT_INTEGRATED"
+            ]
+          },
+          "as_of": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "data": {
+            "anyOf": [
+              {
+                "type": "object",
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "required": [
+          "error",
+          "message"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "Trip": {
+        "type": "object",
+        "required": [
+          "trip_id",
+          "dispatch_id",
+          "assignment_id",
+          "driver_id",
+          "truck_id",
+          "status",
+          "source_stockpile_id",
+          "sku_id",
+          "inventory",
+          "crusher_destination",
+          "contract_integrity",
+          "tare_t",
+          "gross_t",
+          "actual_net_t",
+          "unloaded_verified_at",
+          "returned_available_at"
+        ],
+        "properties": {
+          "trip_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "dispatch_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "truck_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "status": {
+            "type": "string"
+          },
+          "assignment_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "driver_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "source_stockpile_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "sku_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "inventory": {
+            "anyOf": [
+              {
+                "type": "object",
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "crusher_destination": {
+            "anyOf": [
+              {
+                "type": "object",
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "contract_integrity": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "tare_t": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(0|[1-9][0-9]{0,9})(\\.[0-9]{1,6})?$",
+                "description": "Exact tonnes as decimal string, not m3"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "gross_t": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(0|[1-9][0-9]{0,9})(\\.[0-9]{1,6})?$",
+                "description": "Exact tonnes as decimal string, not m3"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "actual_net_t": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(0|[1-9][0-9]{0,9})(\\.[0-9]{1,6})?$",
+                "description": "Exact tonnes as decimal string, not m3"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "unloaded_verified_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "returned_available_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "WeighbridgeEvent": {
+        "type": "object",
+        "required": [
+          "source_system",
+          "external_event_id",
+          "event_type",
+          "trip_id",
+          "truck_id",
+          "weighbridge_id",
+          "occurred_at"
+        ],
+        "properties": {
+          "source_system": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "external_event_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "event_type": {
+            "enum": [
+              "QR_SCANNED",
+              "TARE_RECORDED",
+              "GROSS_RECORDED"
+            ]
+          },
+          "trip_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "truck_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "weighbridge_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "weight_t": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,9})(\\.[0-9]{1,6})?$",
+            "description": "Exact tonnes as decimal string, not m3"
+          }
+        },
+        "description": "QR is identity only and MUST omit weight_t. TARE/GROSS must include positive or zero decimal weight as applicable."
+      },
+      "InventoryItem": {
+        "type": "object",
+        "required": [
+          "stockpile_id",
+          "sku_id",
+          "on_hand_t",
+          "reserved_t",
+          "available_t",
+          "source",
+          "as_of"
+        ],
+        "properties": {
+          "stockpile_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "sku_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "on_hand_t": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(0|[1-9][0-9]{0,9})(\\.[0-9]{1,6})?$",
+                "description": "Exact tonnes as decimal string, not m3"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reserved_t": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(0|[1-9][0-9]{0,9})(\\.[0-9]{1,6})?$",
+                "description": "Exact tonnes as decimal string, not m3"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "available_t": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(0|[1-9][0-9]{0,9})(\\.[0-9]{1,6})?$",
+                "description": "Exact tonnes as decimal string, not m3"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "as_of": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "description": "Target DTO only; legacy projection currently provides m3 separately and null actual tonnes."
+      },
+      "DriverActiveTrip": {
+        "type": "object",
+        "required": [
+          "data_status",
+          "trip"
+        ],
+        "properties": {
+          "data_status": {
+            "enum": [
+              "READY",
+              "EMPTY",
+              "NOT_INTEGRATED"
+            ]
+          },
+          "trip": {
+            "anyOf": [
+              {
+                "type": "object",
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

@@ -30,9 +30,9 @@ test('jetty deactivation after request creation is rechecked before dispatch res
 
 test('a pending survey cannot silently become stock for a different SKU',()=>{
   const s=createSeed();
-  const measurementId=act(s,'measurement.create',{
+  const measurementId=applyAction(s,'measurement.create',{
     stockpileId:'stock-1-1',method:'manual',volumeM3:1000,
-  }).entityId;
+  },{id:'stock-review',role:'stock',crusherIds:['crusher-1']}).entityId;
   let changed=false;
   try {
     act(s,'master.stockpile.save',{id:'stock-1-1',skuId:'split-12'});
