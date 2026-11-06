@@ -73,7 +73,7 @@ test('v1 authenticated read-only façade remains scoped and never invents eviden
     });
     await t.test('legacy mutation still works with existing session and CSRF',async()=>{
       const r=await call('/api/action','POST',{action:'request.create',requestId:randomUUID(),payload:{
-        jettyId:'jetty-1',vesselId:'vessel-1',destination:'Marunda',
+        destinationLocationId:'stockpile-location-crusher-2',jettyId:'jetty-1',vesselId:'vessel-1',destination:'Untrusted text ignored',
         lines:[{skuId:'split-12',quantity:1,unit:'m3'}]}},jetty);
       assert.equal(r.status,200);
       const list=await call('/api/v1/transfer-requests','GET',undefined,admin);

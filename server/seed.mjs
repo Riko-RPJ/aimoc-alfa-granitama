@@ -1,3 +1,5 @@
+import {deriveStockpileLocations} from './stockpile-locations.mjs';
+
 /** Clearly labelled, editable UAT master data. No synthetic live movements. */
 export function createSeed() {
   const createdAt = new Date().toISOString();
@@ -18,5 +20,5 @@ export function createSeed() {
     {id:'vessel-2',code:'BG-DEMO-02',name:'Tongkang Demo 270 ft',jettyId:'jetty-1',payloadLimitT:4500,loadedT:0,reservedT:0,status:'waiting'},
     {id:'vessel-3',code:'BG-DEMO-03',name:'Tongkang Demo 330 ft',jettyId:'jetty-2',payloadLimitT:8500,loadedT:0,reservedT:0,status:'loading'},
   ];
-  return {schemaVersion:1,revision:0,createdAt,updatedAt:createdAt,dataMode:'UAT — data awal contoh, bukan telemetri lapangan',products,crushers,stockpiles,trucks,jetties,vessels,requests:[],dispatches:[],trips:[],measurements:[],inventoryLedger:[],events:[],erpOutbox:[]};
+  return {schemaVersion:1,revision:0,createdAt,updatedAt:createdAt,dataMode:'UAT — data awal contoh, bukan telemetri lapangan',products,crushers,stockpiles,stockpileLocations:deriveStockpileLocations({crushers}),trucks,jetties,vessels,requests:[],dispatches:[],trips:[],measurements:[],inventoryLedger:[],events:[],erpOutbox:[]};
 }

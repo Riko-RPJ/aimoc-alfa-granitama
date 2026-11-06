@@ -6,6 +6,7 @@ import { Check, ChevronRight, Factory, Layers3, Loader2, MapPin, Package, Plus, 
 import { fmt, number, lookup, roleName } from '../shared/legacy-utils.js';
 import { Badge, Button, Field, Modal, Panel, DataTable } from '../../components/ui/index.jsx';
 import {CrusherLocationMaster} from './CrusherLocationMaster.jsx';
+import {StockpileLocationMaster} from './StockpileLocationMaster.jsx';
 
 export function MasterData({
   products,
@@ -17,12 +18,20 @@ export function MasterData({
   setModal,
   csrf,
   notify,
-  onDelete
+  onDelete,
+  stockpileLocations = [],
+  locationBusy = false,
+  locationError = '',
+  onLocationSave,
+  onLocationDelete,
+  initialTab = 'product'
 }) {
-  const [tab, setTab] = useState('product');
-  const definitions = [['product', tr("Produk / SKU"), Package], ['crusher', tr("Crusher"), Factory], ['crusher-location','Crusher Locations',MapPin], ['stockpile', tr("Stockpile"), Layers3], ['truck', tr("Armada"), Truck], ['jetty', tr("Jetty"), MapPin], ['vessel', tr("Kapal"), Ship], ['user', tr("Akun pengguna"), Users]];
+  const language = useLanguage();
+  const [tab, setTab] = useState(initialTab);
+  useEffect(()=>setTab(initialTab),[initialTab]);
+  const definitions = [['product', tr("Produk / SKU"), Package], ['crusher', tr("Crusher"), Factory], ['crusher-location','Crusher Locations',MapPin], ['stockpile-location',language==='en'?'Stockpile locations':'Lokasi stockpile',MapPin], ['stockpile', tr("Stockpile"), Layers3], ['truck', tr("Armada"), Truck], ['jetty', tr("Jetty"), MapPin], ['vessel', tr("Kapal"), Ship], ['user', tr("Akun pengguna"), Users]];
   const actions = record => <div className="row-actions"><button className="text-btn" onClick={() => setModal({type:'master',entity:tab,record})}>{tr("Edit ")}<ChevronRight size={14}/></button><button className="text-btn danger" onClick={() => window.confirm(tr("Hapus master {0}? Tindakan ini tidak dapat dibatalkan.",record.code||record.name)) && onDelete(tab,record.id)}><Trash2 size={13}/>{tr("Hapus")}</button></div>;
-  return <><div className="tabs">{definitions.map(([id, label, Icon]) => <button key={id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}><Icon size={16} />{label}</button>)}</div>{tab === 'crusher-location' ? <CrusherLocationMaster crushers={crushers} csrf={csrf} notify={notify}/> : tab === 'user' ? <UserManagement {...{
+  return <><div className="tabs">{definitions.map(([id, label, Icon]) => <button key={id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}><Icon size={16} />{label}</button>)}</div>{tab === 'stockpile-location' ? <StockpileLocationMaster {...{stockpileLocations,crushers,locationBusy,locationError,onLocationSave,onLocationDelete}}/> : tab === 'crusher-location' ? <CrusherLocationMaster crushers={crushers} csrf={csrf} notify={notify}/> : tab === 'user' ? <UserManagement {...{
       crushers,
       jetties,
       csrf,

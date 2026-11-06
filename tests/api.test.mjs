@@ -32,7 +32,7 @@ test('authenticated multioperator API preserves shared operational state',async 
   const admin=await login('admin'),stock=await login('stock1'),jetty=await login('jetty1'),otherJetty=await login('jetty2');
   let trip,request,revision;
   await t.test('jetty request becomes shared reserved stock and serial fleet queue',async()=>{
-   const created=await action('request.create',{jettyId:'jetty-1',vesselId:'vessel-1',destination:'Marunda',lines:[{skuId:'split-12',quantity:500,unit:'m3'}]},jetty);assert.equal(created.status,200);request=created.body.result.entityId;
+   const created=await action('request.create',{jettyId:'jetty-1',vesselId:'vessel-1',destinationLocationId:'stockpile-location-crusher-2',destination:'Untrusted description ignored',lines:[{skuId:'split-12',quantity:500,unit:'m3'}]},jetty);assert.equal(created.status,200);request=created.body.result.entityId;
    const planned=await action('request.plan',{requestId:request},admin);assert.equal(planned.status,200);assert.ok(planned.body.state.trips.length>12);assert.equal(planned.body.state.vessels[0].reservedT,750);
    assert.equal(planned.body.state.metrics.reservedM3,500);assert.equal(planned.body.state.trips.filter(t=>t.status==='queued').length,planned.body.state.trips.length);revision=planned.body.revision;
    trip=planned.body.state.trips.find(t=>t.crusherId==='crusher-2');

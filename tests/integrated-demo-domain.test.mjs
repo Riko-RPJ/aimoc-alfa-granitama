@@ -11,7 +11,7 @@ const jetty2 = {id: 'jetty-user-2', role: 'jetty', jettyIds: ['jetty-2']};
 const driver1 = {id: 'driver-test-1', role: 'driver', active: true};
 const driver2 = {id: 'driver-test-2', role: 'driver', active: true};
 const options = {drivers: [driver1, driver2]};
-const act = (s, action, p, u = admin, opts = options) => applyIntegratedAction(s, action, p, u, opts);
+const act = (s, action, p, u = admin, opts = options) => applyIntegratedAction(s, action, action === 'request.create' ? {destinationLocationId: 'stockpile-location-crusher-2', ...p} : p, u, opts);
 const close = (a, b, tolerance = 0.00001) => assert.ok(Math.abs(a - b) <= tolerance, `${a} != ${b}`);
 const trip = (s, identifier) => s.trips.find(t => t.id === identifier);
 const sourceOperator = t => t.crusherId === 'crusher-1' ? stock1 : stock2;
