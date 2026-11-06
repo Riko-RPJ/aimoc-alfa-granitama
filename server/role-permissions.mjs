@@ -5,7 +5,7 @@
  */
 export const ROLE_PERMISSIONS=Object.freeze({
  admin:Object.freeze([
-  'operations.read','inventory.read','inventory.measure.approve',
+  'operations.read','inventory.read','inventory.measure.create','inventory.measure.approve',
   'transfer.read','transfer.create','dispatch.read','dispatch.plan',
   'trip.read','trip.start.scoped','trip.depart.scoped','trip.return.scoped','jetty.read','master.read','master.write','audit.read','users.manage'
  ]),
