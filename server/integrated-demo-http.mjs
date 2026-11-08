@@ -114,7 +114,7 @@ export async function handleIntegratedDemo({db,path,method,req,actor,send,parseB
     const state=structuredClone(row.document),drivers=await driversFor(c);
     await guardLocationOperatorReferences(c,state,body.action,payload);
     const result=applyIntegratedAction(state,body.action,payload,actor,{drivers});
-    if(body.action==='trip.driver_scan'&&result.replayed===true){
+    if(['trip.driver_scan','quarry.gate.scan'].includes(body.action)&&result.replayed===true){
       await c.query('INSERT INTO aimoc_alfa_ops.actions(actor_id,request_id,payload_hash,result) VALUES($1,$2,$3,$4::jsonb)',[actor.id,body.requestId,payloadHash,JSON.stringify(result)]);
       return {...await context(c,actor),result,replayed:true};
     }

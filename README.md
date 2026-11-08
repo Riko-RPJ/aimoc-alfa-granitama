@@ -4,6 +4,20 @@ A separate operational UAT application, not the WIM traffic simulator. Changes a
 
 Production URL: https://aimoc-alfa-granitama.vercel.app
 
+Quarry Cilegon weighbridge demo: https://aimoc-quarry-cilegon.vercel.app
+
+## Quarry Cilegon shared workflow
+
+The Cilegon Vercel project uses this same source and the same existing database. Set the public build variable `VITE_APP_VARIANT=quarry-cilegon` for its operational interface. The original Alfa project retains its normal interface; `/quarry-cilegon` also opens the weighbridge workspace there. Accounts are unchanged, but each website has its own host-scoped login session. Visible workspaces refresh shared persisted data every three seconds.
+
+Start as Admin in **Gate configuration**: select WIM + WIM, Static + WIM or Static + Static, set each of the two scales and the third QR-only lane to IN, OUT or BIDIRECTIONAL, then explicitly activate and save. Activation applies the Cilegon workflow to new MARINE requests from either app. Existing requests and historical trips keep their original workflow. Both scales may temporarily be IN or both OUT; scans requiring the unavailable direction must wait for a suitable configuration. Completed scans preserve their original lane/version snapshots.
+
+For the demo: stock1/stock2 enters and Admin approves stock in Alfa; Admin creates a transfer request to a selected jetty/vessel and releases automatic dispatch; the assigned Driver receives a serial truck queue and a stable truck/dispatch QR. Source staff record first entry QR/tare, confirm loading, then record exit QR/gross. Jetty staff independently confirm arrival and unload. The source QR return verifies the empty truck's return and cannot manufacture a receipt. Subsequent trips of that same truck and dispatch may enter through lane 3 using the previously accepted tare only after the preceding trip has both a verified jetty receipt and return. The truck becomes available after its final serial return, unless another waiting dispatch claims it.
+
+Weights are operator-entered demo readings, not field-verified IoT measurements. Net must equal the reserved trip quantity; under/overload is rejected atomically for reconciliation rather than silently changing inventory. Departure decreases source stock once; receipt loads the vessel once. Quarry NetSuite outbox intents carry immutable entry/exit gate versions, simulated weights and original tare provenance, and remain `awaiting_configuration`. There is no live device acknowledgement, physical lane-occupancy interlock, sandbox posting or GPS claim. `/quarry-engineering.html` preserves read-only 3D operations, civil/utilities, construction phases, camera controls, dimensions, canopy and PNG export; the dimensions are conceptual.
+
+Focused checks: `node --test --test-concurrency=1 tests/quarry-cilegon.test.mjs tests/quarry-cilegon-http.test.mjs tests/quarry-cilegon-erp.test.mjs`.
+
 Source repository: https://github.com/Riko-RPJ/aimoc-alfa-granitama
 
 ## Interface languages

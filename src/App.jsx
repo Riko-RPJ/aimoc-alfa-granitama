@@ -32,6 +32,8 @@ import { permissionsForRole, authorizeLegacyAction } from './contracts/role-perm
 import { AdminFinalPage } from './features/pages/admin-final/AdminFinalPage.jsx';
 import { CrossRoleUatPage } from './features/uat/CrossRoleUatPage.jsx';
 import { IntegratedWorkspace } from './features/integrated/IntegratedWorkspace.jsx';
+import { QuarryCilegonWorkspace } from './features/quarry-cilegon/QuarryCilegonWorkspace.jsx';
+const QUARRY_CILEGON_SITE=import.meta.env.VITE_APP_VARIANT==='quarry-cilegon';
 const CROSS_ROLE_UAT=import.meta.env.VITE_CROSS_ROLE_UAT==='1';
 import { Activity, ArrowDownLeft, ArrowDownToLine, ArrowRight, ArrowUpRight, BarChart3, Bell, Box, Camera, Check, CheckCircle2, ChevronDown, ChevronRight, CircleHelp, ClipboardCheck, ClipboardList, Clock3, Download, Factory, FileText, Filter, Layers3, LayoutDashboard, Loader2, LogOut, MapPin, Menu, Package, Plus, RefreshCw, Search, Send, Settings2, ShieldCheck, Ship, Truck, Upload, Users, Video, Wifi, WifiOff, X } from 'lucide-react';
 const legacyNavs = [['overview', 'Ringkasan operasi', LayoutDashboard], ['inventory', 'Stock inventory', Layers3], ['requests', 'Permintaan transfer', ClipboardList], ['dispatch', 'Dispatch & armada', Truck], ['jetty', 'Operasi jetty', Ship], ['master', 'Master data', Settings2], ['audit', 'Audit & NetSuite', FileText], ['access','Role & Access Control',ShieldCheck]];
@@ -394,12 +396,16 @@ export function LegacyApp() {
 // LegacyApp remains available to source reviewers, but never owns /driver/tasks.
 export default function App() {
   useLanguage();
+  const quarryWorkspace=QUARRY_CILEGON_SITE||window.location.pathname.startsWith('/quarry-cilegon');
   const [session,setSession]=useState(null);
   const [booting,setBooting]=useState(true);
   const [logoutError,setLogoutError]=useState('');
   useEffect(()=>{let alive=true;api('/api/me').then(d=>{if(alive)setSession(d);}).catch(()=>{}).finally(()=>{if(alive)setBooting(false);});return()=>{alive=false;};},[]);
+  useEffect(()=>{if(quarryWorkspace)document.title='AIMOC Quarry Cilegon · Weighbridge Operations';},[quarryWorkspace]);
   const logout=async()=>{try{await api('/api/logout',{method:'POST',headers:{'X-CSRF-Token':session?.csrfToken||''},body:'{}'});setSession(null);setLogoutError('');}catch(e){setLogoutError(e.message);}};
   if(booting)return <div className="boot"><Brand/><Loader2 className="spin" size={24}/><p>{tr('Menghubungkan ruang operasi…')}</p></div>;
-  if(!session?.user)return <Login onLogin={d=>{setSession(d);setLogoutError('');}}/>;
-  return <IntegratedWorkspace key={session.user.id} user={session.user} csrf={session.csrfToken||''} logout={logout} logoutError={logoutError} onUnauthorized={()=>setSession(null)}/>;
+  if(!session?.user)return <>{quarryWorkspace&&<div style={{position:'absolute',zIndex:2,top:16,left:24,color:'#fff',fontSize:12,fontWeight:700,letterSpacing:'0.16em'}}>AIMOC · QUARRY CILEGON</div>}<Login onLogin={d=>{setSession(d);setLogoutError('');}}/></>;
+  const props={user:session.user,session,csrf:session.csrfToken||'',logout,logoutError,onUnauthorized:()=>setSession(null)};
+  if(quarryWorkspace)return <QuarryCilegonWorkspace key={session.user.id} {...props}/>;
+  return <><a className="quarry-cross-site-link" href="/quarry-cilegon" style={{display:'block',padding:'9px 20px',background:'#082e35',color:'#fff',fontSize:12,textAlign:'center',textDecoration:'none'}}>{getLanguage()==='en'?'Quarry Cilegon · Open weighbridge, QR gates and serial trips':'Quarry Cilegon · Buka jembatan timbang, gate QR dan ritase serial'} ↗</a><IntegratedWorkspace key={session.user.id} {...props}/></>;
 }

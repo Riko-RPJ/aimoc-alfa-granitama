@@ -5,6 +5,7 @@ import {applyDriverScan,driverScanProgress,DRIVER_TWO_SCAN_MODE} from './driver-
 import { applyAction, DomainError } from './domain.mjs';
 import {ensureStockpileLocations, stockpileLocationsForRead, applyStockpileLocationAction, resolveStockpileDestination, ensureReceivingStockpilesForRequest} from './stockpile-locations.mjs';
 import {scheduleAutomaticDispatch,automaticDispatchSummary,truckAvailability,assertSerialDispatchClaims,refreshAutomaticDispatchProgress as aggregate} from './automatic-dispatch.mjs';
+import {QUARRY_CILEGON_WORKFLOW,isQuarryCilegon,quarryCilegonConfig,applyQuarryCilegonAction,quarryTripProjection,quarryErpFields} from './quarry-cilegon-domain.mjs';
 export {allocateAutomaticDispatch,upgradeToAutomaticDispatch} from './automatic-dispatch.mjs';
 
 // This is an explicitly synthetic workflow over the existing operation document.
@@ -48,7 +49,7 @@ function ledger(s, actor, type, stockpileId, volumeM3, t, tonnageT = 0) {
 }
 
 function erp(s, type, t) {
-  s.erpOutbox.push({id: id('erp'), createdAt: timestamp(), type, entityId: t.id, status: 'awaiting_configuration', system: 'oracle_netsuite', source: SOURCE, synthetic: true, payload: {tripId: t.id, tripCode: t.code, requestId: t.requestId, dispatchId: t.dispatchId, skuId: t.skuId, volumeM3: t.volumeM3, tonnageT: t.tonnageT, sourceStockpileId: t.stockpileId, destinationStockpileId: t.destinationStockpileId || null, jettyId: t.jettyId, vesselId: t.vesselId, receiptCode: t.receiptCode || null, quantitySource: SOURCE, ...locationFields(t)}});
+  s.erpOutbox.push({id: id('erp'), createdAt: timestamp(), type, entityId: t.id, status: 'awaiting_configuration', system: 'oracle_netsuite', source: SOURCE, synthetic: true, payload: {tripId: t.id, tripCode: t.code, requestId: t.requestId, dispatchId: t.dispatchId, skuId: t.skuId, volumeM3: t.volumeM3, tonnageT: t.tonnageT, sourceStockpileId: t.stockpileId, destinationStockpileId: t.destinationStockpileId || null, jettyId: t.jettyId, vesselId: t.vesselId, receiptCode: t.receiptCode || null, quantitySource: SOURCE, ...locationFields(t),...quarryErpFields(t)}});
 }
 
 
@@ -71,6 +72,7 @@ function createRequest(s, p, actor) {
     request.source = SOURCE;
     request.synthetic = true;
     request.quantitySource = 'REQUESTED_DEMO';
+    if(s.quarryCilegon?.enabled===true&&s.quarryCilegon.defaultWorkflow===QUARRY_CILEGON_WORKFLOW)request.workflow=QUARRY_CILEGON_WORKFLOW;
     // Preserve tonnes explicitly requested instead of re-deriving rounded m3.
     request.lines.forEach((line, i) => { if (p.lines[i].unit === 't') line.tonnageT = numeric(p.lines[i].quantity, 'Tonase', true); });
     const createdEvent = s.events.at(-1);
@@ -119,6 +121,7 @@ function planRequest(s, p, actor, options) {
   if (vessel && (vessel.active === false || vessel.status === 'closed' || vessel.jettyId !== request.jettyId || row(s, 'jetties', request.jettyId).active === false)) fail('Tujuan kapal/jetty tidak tersedia.', 'INACTIVE_DESTINATION', 409);
   if (vessel && requestedT > vessel.payloadLimitT - vessel.loadedT - vessel.reservedT + EPS) fail('Sisa kapasitas kapal termasuk reservasi tidak cukup.', 'VESSEL_CAPACITY', 409);
   const dispatch = {id: id('dsp'), code: nextCode('DSP', s.dispatches), requestId: request.id, transferMode: request.transferMode, source: SOURCE, synthetic: true, ...locationFields(request), destinationId: request.destinationId || null, jettyId: request.jettyId, vesselId: request.vesselId, allocations: [], tripIds: [], status: 'planned', createdAt: timestamp(), completedTrips: 0, deliveredM3: 0, deliveredT: 0};
+  if(isQuarryCilegon(request))dispatch.workflow=QUARRY_CILEGON_WORKFLOW;
   let sequence = s.trips.reduce((max, t) => Math.max(max, t.sequence || 0), 0);
   let estimatedTrips=0;
   for (const line of request.lines) {
@@ -141,6 +144,7 @@ function planRequest(s, p, actor, options) {
         if (volumeM3 <= 0) fail('Kuantitas terlalu kecil untuk presisi volume demo.', 'QUANTITY_PRECISION', 409);
         if (round(stock.reservedM3 + volumeM3) > stock.onHandM3) fail('Pembulatan reservasi melebihi stok tersedia.', 'INSUFFICIENT_STOCK', 409);
         const trip = {id: id('trip'), code: nextCode('RIT', s.trips), source: SOURCE, synthetic: true, quantitySource: 'PLANNED_DEMO', requestId: request.id, dispatchId: dispatch.id, transferMode: request.transferMode, ...locationFields(request), stockpileId: stock.id, crusherId: stock.crusherId, skuId: line.skuId, destinationId: request.destinationId || null, destinationStockpileId: target?.id || null, destinationCrusherId: target?.crusherId || null, truckId:null,assignedDriverUserId:null,assignmentMode:'AUTOMATIC',jettyId: request.jettyId, vesselId: request.vesselId, densityTPerM3: line.densityTPerM3, volumeM3, tonnageT, status:'waiting_truck',sequence:++sequence,queueSequence:sequence,createdAt:timestamp(),estimatedStartAt:null,estimatedReturnAt:null,weighingEvents:[]};
+        if(isQuarryCilegon(request))trip.workflow=QUARRY_CILEGON_WORKFLOW;
         s.trips.push(trip);
         dispatch.tripIds.push(trip.id);
         stock.reservedM3 = round(stock.reservedM3 + volumeM3);
@@ -191,12 +195,14 @@ function reconcile(t) {
 function moveTrip(s, action, p, actor, options) {
   const t = row(s, 'trips', p.tripId);
   if (!integrated(t)) fail('Ritase ini bukan demo terintegrasi.', 'SOURCE_MISMATCH', 409);
+  if(isQuarryCilegon(t)&&!options.quarryGateAuthorized&&!['start','loading','arrive','receive','return_start'].includes(action))fail('Gunakan scan gerbang Quarry Cilegon untuk QR, timbang, dan verifikasi kembali.','QUARRY_GATE_REQUIRED',409);
   for (const key of ['truckId', 'skuId', 'stockpileId', 'jettyId', 'vesselId', 'destinationStockpileId']) if (p[key] !== undefined && p[key] !== t[key]) fail('Truk, SKU, atau tujuan tidak sesuai dispatch.', 'DESTINATION_MISMATCH', 409);
   const stock = row(s, 'stockpiles', t.stockpileId);
   const sourceScope = () => scope(actor, 'stock', stock.crusherId);
   const destinationScope = () => scope(actor, t.transferMode === 'LAND' ? 'stock' : 'jetty', t.transferMode === 'LAND' ? t.destinationCrusherId : t.jettyId);
   const isState = (...statuses) => { if (!statuses.includes(t.status)) fail(`Status ${t.status}; tindakan membutuhkan ${statuses.join('/')}.`, 'INVALID_TRANSITION', 409); };
-  if (action === 'qr') admin(actor);
+  if(options.quarryGateAuthorized)sourceScope();
+  else if (action === 'qr') admin(actor);
   else if (['start', 'return_start'].includes(action)) driver(actor, t);
   else if (['arrive', 'receive'].includes(action)) destinationScope();
   else sourceScope();
@@ -297,13 +303,14 @@ export function applyIntegratedAction(state, action, payload, actor, options = {
   for (const key of ['products', 'crushers', 'stockpiles', 'trucks', 'jetties', 'vessels', 'requests', 'dispatches', 'trips', 'inventoryLedger', 'events', 'erpOutbox']) if (!Array.isArray(draft[key])) fail('Dokumen operasional tidak lengkap.', 'STATE_INVALID', 409);
   ensureStockpileLocations(draft);
   let result;
-  if (['master.stockpileLocation.save', 'master.stockpileLocation.delete'].includes(action)) result = applyStockpileLocationAction(draft, action, payload, actor);
+  if (typeof action==='string'&&action.startsWith('quarry.')) result=applyQuarryCilegonAction(draft,action,payload,actor,options,{createRequest:p=>createRequest(draft,p,actor),planRequest:p=>planRequest(draft,p,actor,options),moveTrip:(a,p,o)=>moveTrip(draft,a,p,actor,o)});
+  else if (['master.stockpileLocation.save', 'master.stockpileLocation.delete'].includes(action)) result = applyStockpileLocationAction(draft, action, payload, actor);
   else if (action === 'request.create') result = createRequest(draft, payload, actor);
   else if (action === 'request.plan') result = planRequest(draft, payload, actor, options);
   else if (action === 'trip.driver_scan') result = applyDriverScan(draft,payload,actor,options);
   else if (typeof action === 'string' && action.startsWith('trip.')) result = moveTrip(draft, action.slice(5), payload, actor, options);
   else fail('Tindakan demo tidak didukung.', 'ACTION_NOT_FOUND', 404);
-  if(action==='trip.driver_scan'&&result.replayed===true)return result;
+  if((action==='trip.driver_scan'||action==='quarry.gate.scan')&&result.replayed===true)return result;
   draft.updatedAt = timestamp();
   Object.assign(state, draft);
   return result;
@@ -355,6 +362,12 @@ export function integratedView(state, actor, options = {}) {
     result.driverScan=driverScanProgress(state,t,actor,options);
     result.displayStatus=t.driverScanMode===DRIVER_TWO_SCAN_MODE&&t.status==='returned'?'completed':t.status;
     result.allowedActions = t.driverScanMode===DRIVER_TWO_SCAN_MODE?(result.driverScan.canScan?['trip.driver_scan']:[]):[...allowed,...(result.driverScan.canScan?['trip.driver_scan']:[])];
+    if(isQuarryCilegon(t)){
+      result.quarry=quarryTripProjection(state,t,actor,options);
+      result.driverScan={mode:QUARRY_CILEGON_WORKFLOW,phase:'QUARRY_WORKFLOW',nextStage:null,canScan:false,reason:'QUARRY_GATE_REQUIRED',quantityBasis:'SCALE_SIMULATION',measurementPending:!t.grossEventId};
+      result.allowedActions=allowed.filter(action=>['trip.start','trip.loading','trip.arrive','trip.receive','trip.return_start'].includes(action));
+      if(result.quarry.allowedPurposes.length)result.allowedActions.push('quarry.gate.scan');
+    }
     return result;
   });
   const tripIds = new Set(view.trips.map(t => t.id));
@@ -411,6 +424,7 @@ export function integratedView(state, actor, options = {}) {
   view.fleet = fleet;
   view.drivers = driverCatalog(options.drivers).filter(d => actor.role === 'admin' || d.id === actor.id).map(d => ({id: d.id, name: d.name || d.displayName || d.username || d.id, username: d.username, role: 'driver', active: true}));
   view.integratedDemo = {source: SOURCE, synthetic: true, productionEvidence: false, netsuitePosting: 'awaiting_configuration', activeTrips: fleet.filter(t => t.status === 'busy').length,autoDispatch:automaticDispatchSummary(actor.role==='admin'?state:{...state,trips:view.trips})};
+  view.quarryCilegon=quarryCilegonConfig(state);
   const sum = (rows, field) => round(rows.reduce((total, item) => total + (item[field] || 0), 0));
   view.metrics = {onHandM3: sum(view.stockpiles, 'onHandM3'), reservedM3: sum(view.stockpiles, 'reservedM3'), availableM3: round(sum(view.stockpiles, 'onHandM3') - sum(view.stockpiles, 'reservedM3')), inTransitM3: sum(view.trips.filter(t => ['in_transit', 'arrived'].includes(t.status)), 'volumeM3'), deliveredM3: sum(view.trips.filter(t => t.receivedAt), 'volumeM3'), deliveredT: sum(view.trips.filter(t => t.receivedAt), 'tonnageT'), availableTrucks: fleet.filter(t => t.status === 'available').length, busyTrucks: fleet.filter(t => t.status === 'busy').length, allocatedTrucks: fleet.filter(t => t.status === 'allocated').length, activeTrips: view.trips.filter(active).length, queuedTrips: view.trips.filter(t => t.status === 'queued').length, completedTrips: view.trips.filter(t => t.status === 'returned').length, openRequests: view.requests.filter(r => r.status !== 'completed').length, erpPending: view.erpOutbox.length};
   for (const stock of view.stockpiles) if (stock.onHandM3 !== undefined) stock.availableM3 = round(stock.onHandM3 - stock.reservedM3);

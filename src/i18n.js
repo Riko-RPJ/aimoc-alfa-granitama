@@ -23,10 +23,11 @@ export function localize(value){
 }
 function applyDocumentLanguage(){
  if(typeof document==='undefined')return;
+ const quarry=import.meta.env.VITE_APP_VARIANT==='quarry-cilegon'||globalThis.location?.pathname?.startsWith('/quarry-cilegon');
  document.documentElement.lang=language;
- document.title=language==='en'?'AIMOC · Alfa Granitama Operations':'AIMOC · Operasi Alfa Granitama';
+ document.title=quarry?(language==='en'?'AIMOC · Quarry Cilegon Weighbridge':'AIMOC · Jembatan Timbang Quarry Cilegon'):(language==='en'?'AIMOC · Alfa Granitama Operations':'AIMOC · Operasi Alfa Granitama');
  const description=document.querySelector('meta[name="description"]');
- if(description)description.content=language==='en'?'AIMOC Gandasari Alfa Granitama — crusher inventory, fleet dispatch and jetty receiving operations.':'AIMOC Gandasari Alfa Granitama — aplikasi operasi stok crusher, dispatch armada dan penerimaan jetty.';
+ if(description)description.content=quarry?(language==='en'?'AIMOC Quarry Cilegon — shared stock inventory, serial dispatch trips, bidirectional weighbridges, QR return gates and jetty receiving.':'AIMOC Quarry Cilegon — stok bersama, ritase dispatch serial, jembatan timbang dua arah, jalur kembali QR dan penerimaan jetty.'):(language==='en'?'AIMOC Gandasari Alfa Granitama — crusher inventory, fleet dispatch and jetty receiving operations.':'AIMOC Gandasari Alfa Granitama — aplikasi operasi stok crusher, dispatch armada dan penerimaan jetty.');
 }
 export function setLanguage(next){
  if(!allowed.has(next)||next===language)return;

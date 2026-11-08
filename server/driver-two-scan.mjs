@@ -51,6 +51,7 @@ function legacyReceived(state,trip){
  return ledger.length===2&&departure.length===1&&receipt.length===1&&outbox.length===2&&erp('stock_transfer_departed').length===1&&erp('stock_transfer_received').length===1;
 }
 function phase(state,trip){
+ if(trip.workflow==='QUARRY_CILEGON')return {phase:'QUARRY_WORKFLOW',nextStage:null,origin:'QUARRY_GATE_REQUIRED'};
  if(trip.driverScanMode===DRIVER_TWO_SCAN_MODE){
   if(trip.status==='returned'&&time(trip.driverSecondScannedAt))return {phase:'COMPLETED',nextStage:null,origin:trip.driverScanOrigin||'DRIVER_FIRST_SCAN'};
   const scan1=(state.events||[]).filter(event=>event.type==='trip.driver_scan'&&event.source===SOURCE&&event.entityId===trip.id&&event.expectedStage===1&&event.actorId===trip.assignedDriverUserId&&event.at===trip.driverFirstScannedAt);
@@ -127,6 +128,7 @@ function outbox(state,type,trip,at){
 export function applyDriverScan(state,payload,actor,options={}){
  validatePayload(payload);
  const trip=one(state,'trips',payload.tripId);
+ if(trip.workflow==='QUARRY_CILEGON')fail('Gunakan alur gerbang dan penerimaan jetty Quarry Cilegon.','QUARRY_GATE_REQUIRED');
  if(actor?.role!=='driver'||trip.assignedDriverUserId!==actor.id||actor.active===false||actor.disabled===true||!(options.drivers||[]).some(user=>user.id===actor.id&&user.role==='driver'&&user.active!==false&&user.disabled!==true))fail('Hanya Driver aktif yang ditugaskan dapat mengonfirmasi scan.','DRIVER_SCAN_FORBIDDEN',403);
  const descriptor=driverAssignmentQr(state,actor,{tripId:trip.id,drivers:options.drivers});
  if(payload.qrValue!==descriptor.qr.value||fingerprint(payload.binding)!==fingerprint(descriptor.binding))fail('QR atau penugasan telah berubah. Muat ulang QR ritase.','DRIVER_SCAN_BINDING_INVALID');
