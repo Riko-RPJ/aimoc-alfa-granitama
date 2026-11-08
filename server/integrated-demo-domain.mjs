@@ -2,7 +2,8 @@ import { randomUUID, createHash } from 'node:crypto';
 import {isDispatchSourceArea} from '../shared/inventory-areas.mjs';
 import {summarizeDriverDailyTrips} from './driver-daily-summary.mjs';
 import {applyDriverScan,driverScanProgress,DRIVER_TWO_SCAN_MODE} from './driver-two-scan.mjs';
-import { applyAction, DomainError } from './domain.mjs';
+import {DomainError,trimLegacyDisplayEvents} from './domain.mjs';
+import {requestLifecycle,requestRevision,assertRequestChange} from './request-lifecycle.mjs';
 import {ensureStockpileLocations, stockpileLocationsForRead, applyStockpileLocationAction, resolveStockpileDestination, ensureReceivingStockpilesForRequest} from './stockpile-locations.mjs';
 import {scheduleAutomaticDispatch,automaticDispatchSummary,truckAvailability,assertSerialDispatchClaims,refreshAutomaticDispatchProgress as aggregate} from './automatic-dispatch.mjs';
 import {QUARRY_CILEGON_WORKFLOW,isQuarryCilegon,quarryCilegonConfig,applyQuarryCilegonAction,quarryTripProjection,quarryErpFields} from './quarry-cilegon-domain.mjs';
@@ -43,6 +44,7 @@ const locationFields = record => Object.fromEntries(['destination', 'destination
 function event(s, actor, action, entityId, extra = {}) {
   const result = {id: id('evt'), at: timestamp(), actorId: actor.id, actorName: actor.name || actor.username || actor.id, role: actor.role, type: action, entityId, source: SOURCE, synthetic: true, ...extra};
   s.events.push(result);
+  trimLegacyDisplayEvents(s);
   return result;
 }
 
@@ -64,41 +66,68 @@ function destination(s, request, skuId, requestedStockpileId) {
   return result;
 }
 
-function createRequest(s, p, actor) {
-  if (p.transferMode === 'LAND') {admin(actor);ensureReceivingStockpilesForRequest(s, p);}
-  const resolved = resolveStockpileDestination(s, p);
-  if ((p.transferMode || 'MARINE') === 'MARINE') {
-    const result = applyAction(s, 'request.create', {...p, destination: resolved.destination}, actor);
-    const request = row(s, 'requests', result.entityId);
-    Object.assign(request, resolved);
-    request.source = SOURCE;
-    request.synthetic = true;
-    request.quantitySource = 'REQUESTED_DEMO';
-    if(s.quarryCilegon?.enabled===true&&s.quarryCilegon.defaultWorkflow===QUARRY_CILEGON_WORKFLOW)request.workflow=QUARRY_CILEGON_WORKFLOW;
-    // Preserve tonnes explicitly requested instead of re-deriving rounded m3.
-    request.lines.forEach((line, i) => { if (p.lines[i].unit === 't') line.tonnageT = numeric(p.lines[i].quantity, 'Tonase', true); });
-    const createdEvent = s.events.at(-1);
-    if (createdEvent) Object.assign(createdEvent, {source: SOURCE, synthetic: true});
-    return {...result, requestId: request.id, source: SOURCE};
+/** One authoritative definition validator for create and pre-dispatch edit. */
+function requestDefinition(s,p,actor){
+  const transferMode=p.transferMode||'MARINE';
+  if(!['LAND','MARINE'].includes(transferMode))fail('Mode harus LAND atau MARINE.','TRANSFER_MODE_INVALID');
+  if(transferMode==='LAND'){admin(actor);ensureReceivingStockpilesForRequest(s,p);}
+  const resolved=resolveStockpileDestination(s,{...p,transferMode});
+  let jettyId=null,vesselId=null;
+  if(transferMode==='MARINE'){
+    const jetty=row(s,'jetties',p.jettyId),vessel=row(s,'vessels',p.vesselId);scope(actor,'jetty',jetty.id);
+    if(vessel.jettyId!==jetty.id||vessel.active===false||vessel.status==='closed'||jetty.active===false)fail('Kapal dan jetty tidak cocok, nonaktif, atau sudah ditutup.');
+    jettyId=jetty.id;vesselId=vessel.id;
   }
-  admin(actor);
-  if (p.transferMode !== 'LAND') fail('Mode harus LAND atau MARINE.', 'TRANSFER_MODE_INVALID');
-  const request = {id: id('req'), code: nextCode('TR', s.requests), transferMode: 'LAND', ...resolved, jettyId: null, vesselId: null, lines: [], status: 'requested', requestedBy: actor.id, createdAt: timestamp(), deliveredM3: 0, deliveredT: 0, source: SOURCE, synthetic: true, quantitySource: 'REQUESTED_DEMO'};
+  const definition={transferMode,...resolved,jettyId,vesselId,lines:[]};
   if (!Array.isArray(p.lines) || !p.lines.length || p.lines.length > 6) fail('Permintaan harus berisi 1–6 SKU.');
   const seen = new Set();
-  request.lines = p.lines.map(line => {
+  definition.lines = p.lines.map(line => {
+    if(!line||typeof line!=='object'||Array.isArray(line))fail('Baris SKU tidak valid.','REQUEST_LINES_INVALID');
     const product = row(s, 'products', line.skuId);
     if (!product.active || seen.has(product.id)) fail('SKU nonaktif atau duplikat.');
     seen.add(product.id);
     if (!['t', 'm3'].includes(line.unit)) fail('Satuan harus t atau m3.');
     const quantity = numeric(line.quantity, 'Jumlah transfer', true);
+    if(transferMode==='MARINE'&&quantity>1000000)fail('Jumlah transfer tidak valid.');
     const densityTPerM3 = numeric(product.densityTPerM3, 'Berat jenis', true);
-    const target = destination(s, request, product.id, line.destinationStockpileId);
-    return {skuId: product.id, quantity, unit: line.unit, densityTPerM3, tonnageT: round(line.unit === 't' ? quantity : quantity * densityTPerM3), volumeM3: round(line.unit === 'm3' ? quantity : quantity / densityTPerM3), destinationStockpileId: target.id};
+    const target=transferMode==='LAND'?destination(s,definition,product.id,line.destinationStockpileId):null;
+    return {skuId: product.id, quantity, unit: line.unit, densityTPerM3, tonnageT: round(line.unit === 't' ? quantity : quantity * densityTPerM3), volumeM3: round(line.unit === 'm3' ? quantity : quantity / densityTPerM3),...(target?{destinationStockpileId:target.id}:{})};
   });
+  return definition;
+}
+
+function createRequest(s, p, actor) {
+  const definition=requestDefinition(s,p,actor);
+  const request={id:id('req'),code:nextCode('TR',s.requests),...definition,status:'requested',requestedBy:actor.id,createdAt:timestamp(),deliveredM3:0,deliveredT:0,source:SOURCE,synthetic:true,quantitySource:'REQUESTED_DEMO',requestRevision:1};
+  if(definition.transferMode==='MARINE'&&s.quarryCilegon?.enabled===true&&s.quarryCilegon.defaultWorkflow===QUARRY_CILEGON_WORKFLOW)request.workflow=QUARRY_CILEGON_WORKFLOW;
   s.requests.push(request);
   event(s, actor, 'request.created', request.id);
-  return {entityId: request.id, requestId: request.id, source: SOURCE};
+  return {entityId:request.id,requestId:request.id,source:SOURCE,requestRevision:1,message:definition.transferMode==='MARINE'?'Permintaan transfer dibuat.':undefined};
+}
+
+function updateRequest(s,p,actor){
+  admin(actor);
+  const request=row(s,'requests',p.requestId),revision=assertRequestChange(s,request,actor,p.expectedRequestRevision);
+  const allowed=new Set(['requestId','expectedRequestRevision','transferMode','destinationLocationId','jettyId','vesselId','lines']);
+  if(Object.keys(p).some(key=>!allowed.has(key))||!['LAND','MARINE'].includes(p.transferMode))fail('Field perubahan permintaan tidak dikenali.','REQUEST_FIELD_INVALID');
+  if(Array.isArray(p.lines)&&p.lines.some(line=>!line||typeof line!=='object'||Array.isArray(line)||Object.keys(line).some(key=>!['skuId','quantity','unit','destinationStockpileId'].includes(key))))fail('Kirim SKU, kuantitas, dan satuan asli; hasil konversi ditentukan server.','REQUEST_FIELD_INVALID');
+  const before={transferMode:request.transferMode,...locationFields(request),jettyId:request.jettyId,vesselId:request.vesselId,lines:structuredClone(request.lines),workflow:request.workflow||null};
+  const definition=requestDefinition(s,p,actor),at=timestamp();
+  Object.assign(request,definition,{editedAt:at,editedBy:actor.id,requestRevision:revision+1,remainingT:round(definition.lines.reduce((sum,line)=>sum+line.tonnageT,0)),remainingM3:round(definition.lines.reduce((sum,line)=>sum+line.volumeM3,0))});
+  if(definition.transferMode==='LAND'&&request.workflow===QUARRY_CILEGON_WORKFLOW)delete request.workflow;
+  else if(before.transferMode==='LAND'&&definition.transferMode==='MARINE'&&!request.workflow&&s.quarryCilegon?.enabled===true&&s.quarryCilegon.defaultWorkflow===QUARRY_CILEGON_WORKFLOW)request.workflow=QUARRY_CILEGON_WORKFLOW;
+  event(s,actor,'request.updated',request.id,{before,after:{transferMode:request.transferMode,...locationFields(request),jettyId:request.jettyId,vesselId:request.vesselId,lines:structuredClone(request.lines),workflow:request.workflow||null},requestRevision:request.requestRevision});
+  return {entityId:request.id,requestId:request.id,source:SOURCE,requestRevision:request.requestRevision,message:'Permintaan transfer diperbarui.'};
+}
+
+function cancelRequest(s,p,actor){
+  admin(actor);
+  const request=row(s,'requests',p.requestId),revision=assertRequestChange(s,request,actor,p.expectedRequestRevision);
+  if(Object.keys(p).some(key=>!['requestId','expectedRequestRevision','reason'].includes(key))||p.reason!==undefined&&(typeof p.reason!=='string'||p.reason.length>500))fail('Alasan pembatalan maksimal 500 karakter.','REQUEST_FIELD_INVALID');
+  const at=timestamp(),reason=typeof p.reason==='string'?p.reason.trim():'';
+  Object.assign(request,{status:'cancelled',cancelledAt:at,cancelledBy:actor.id,cancelReason:reason||null,requestRevision:revision+1,remainingT:0,remainingM3:0,pendingTrips:0,deliveryStatus:'cancelled'});
+  event(s,actor,'request.cancelled',request.id,{reason:reason||null,requestRevision:request.requestRevision});
+  return {entityId:request.id,requestId:request.id,source:SOURCE,requestRevision:request.requestRevision,message:'Permintaan transfer dibatalkan.'};
 }
 
 function driverCatalog(drivers) {
@@ -109,7 +138,10 @@ function planRequest(s, p, actor, options) {
   admin(actor);
   const request = row(s, 'requests', p.requestId);
   if (!integrated(request)) fail('Permintaan ini bukan workflow demo terintegrasi.', 'SOURCE_MISMATCH', 409);
+  if(request.status==='cancelled'||request.cancelledAt||request.cancelledBy)fail('Permintaan sudah dibatalkan.','REQUEST_CANCELLED',409);
   if (request.status !== 'requested') fail('Permintaan sudah direncanakan.', 'ALREADY_PLANNED', 409);
+  const eligibility=requestLifecycle(s,request,actor);
+  if(!eligibility.canEdit)fail(eligibility.requestActionBlockedReason,eligibility.requestActionBlockedCode,409);
   if (p.destinationLocationId !== undefined && request.destinationLocationId && p.destinationLocationId !== request.destinationLocationId) fail('Lokasi tujuan permintaan tidak boleh diganti melalui perencanaan.', 'DESTINATION_MISMATCH', 409);
   ensureReceivingStockpilesForRequest(s, {...request, ...(p.destinationLocationId === undefined ? {} : {destinationLocationId: p.destinationLocationId})});
   const resolved = resolveStockpileDestination(s, {...request, ...(p.destinationLocationId === undefined ? {} : {destinationLocationId: p.destinationLocationId})}, {allowLegacy: true});
@@ -174,7 +206,7 @@ function planRequest(s, p, actor, options) {
   dispatch.volumeM3 = round(dispatch.allocations.reduce((sum, a) => sum + a.volumeM3, 0));
   s.dispatches.push(dispatch);
   if (vessel) vessel.reservedT = round(vessel.reservedT + dispatch.tonnageT);
-  Object.assign(request, {dispatchId: dispatch.id, status: 'planned', plannedAt: timestamp(), plannedBy: actor.id, planningStatus: 'INTEGRATED_DEMO'});
+  Object.assign(request, {dispatchId: dispatch.id, status: 'planned', plannedAt: timestamp(), plannedBy: actor.id, planningStatus: 'INTEGRATED_DEMO',requestRevision:requestRevision(request)+1});
   event(s, actor, 'request.planned', request.id);
   const scheduling=scheduleAutomaticDispatch(s,options,actor);
   aggregate(s);
@@ -317,6 +349,8 @@ export function applyIntegratedAction(state, action, payload, actor, options = {
   else if (typeof action==='string'&&action.startsWith('quarry.')) result=applyQuarryCilegonAction(draft,action,payload,actor,options,{createRequest:p=>createRequest(draft,p,actor),planRequest:p=>planRequest(draft,p,actor,options),moveTrip:(a,p,o)=>moveTrip(draft,a,p,actor,o)});
   else if (['master.stockpileLocation.save', 'master.stockpileLocation.delete'].includes(action)) result = applyStockpileLocationAction(draft, action, payload, actor);
   else if (action === 'request.create') result = createRequest(draft, payload, actor);
+  else if (action === 'request.update') result = updateRequest(draft, payload, actor);
+  else if (action === 'request.cancel') result = cancelRequest(draft, payload, actor);
   else if (action === 'request.plan') result = planRequest(draft, payload, actor, options);
   else if (action === 'trip.driver_scan') result = applyDriverScan(draft,payload,actor,options);
   else if (typeof action === 'string' && action.startsWith('trip.')) result = moveTrip(draft, action.slice(5), payload, actor, options);
@@ -386,7 +420,7 @@ export function integratedView(state, actor, options = {}) {
   const dispatchIds = new Set(view.trips.map(t => t.dispatchId));
   const requestIds = new Set(view.trips.map(t => t.requestId));
   const requestVisible = r => integrated(r) && (actor.role === 'admin' || requestIds.has(r.id) || actor.role === 'jetty' && (actor.jettyIds || []).includes(r.jettyId));
-  view.requests = view.requests.filter(requestVisible);
+  view.requests = view.requests.filter(requestVisible).map(request=>({...request,...requestLifecycle(state,request,actor)}));
   view.dispatches = view.dispatches.filter(d => integrated(d) && (actor.role === 'admin' || dispatchIds.has(d.id)));
   if (actor.role !== 'admin') {
     delete view.automaticDispatchUpgrade;
@@ -439,7 +473,7 @@ export function integratedView(state, actor, options = {}) {
   view.integratedDemo = {source: SOURCE, synthetic: true, productionEvidence: false, netsuitePosting: 'awaiting_configuration', activeTrips: fleet.filter(t => t.status === 'busy').length,autoDispatch:automaticDispatchSummary(actor.role==='admin'?state:{...state,trips:view.trips})};
   view.quarryCilegon=quarryCilegonConfig(state);
   const sum = (rows, field) => round(rows.reduce((total, item) => total + (item[field] || 0), 0));
-  view.metrics = {onHandM3: sum(view.stockpiles, 'onHandM3'), reservedM3: sum(view.stockpiles, 'reservedM3'), availableM3: round(sum(view.stockpiles, 'onHandM3') - sum(view.stockpiles, 'reservedM3')), inTransitM3: sum(view.trips.filter(t => ['in_transit', 'arrived'].includes(t.status)), 'volumeM3'), deliveredM3: sum(view.trips.filter(t => t.receivedAt), 'volumeM3'), deliveredT: sum(view.trips.filter(t => t.receivedAt), 'tonnageT'), availableTrucks: fleet.filter(t => t.status === 'available').length, busyTrucks: fleet.filter(t => t.status === 'busy').length, allocatedTrucks: fleet.filter(t => t.status === 'allocated').length, activeTrips: view.trips.filter(active).length, queuedTrips: view.trips.filter(t => t.status === 'queued').length, completedTrips: view.trips.filter(t => t.status === 'returned').length, openRequests: view.requests.filter(r => r.status !== 'completed').length, erpPending: view.erpOutbox.length};
+  view.metrics = {onHandM3: sum(view.stockpiles, 'onHandM3'), reservedM3: sum(view.stockpiles, 'reservedM3'), availableM3: round(sum(view.stockpiles, 'onHandM3') - sum(view.stockpiles, 'reservedM3')), inTransitM3: sum(view.trips.filter(t => ['in_transit', 'arrived'].includes(t.status)), 'volumeM3'), deliveredM3: sum(view.trips.filter(t => t.receivedAt), 'volumeM3'), deliveredT: sum(view.trips.filter(t => t.receivedAt), 'tonnageT'), availableTrucks: fleet.filter(t => t.status === 'available').length, busyTrucks: fleet.filter(t => t.status === 'busy').length, allocatedTrucks: fleet.filter(t => t.status === 'allocated').length, activeTrips: view.trips.filter(active).length, queuedTrips: view.trips.filter(t => t.status === 'queued').length, completedTrips: view.trips.filter(t => t.status === 'returned').length, openRequests: view.requests.filter(r => !['completed','cancelled'].includes(r.status)).length, erpPending: view.erpOutbox.length};
   for (const stock of view.stockpiles) if (stock.onHandM3 !== undefined) stock.availableM3 = round(stock.onHandM3 - stock.reservedM3);
   for (const vessel of view.vessels) vessel.remainingT = round(vessel.payloadLimitT - vessel.loadedT - vessel.reservedT);
   view.access = {role: actor.role, crusherIds: actor.crusherIds || [], jettyIds: actor.jettyIds || []};

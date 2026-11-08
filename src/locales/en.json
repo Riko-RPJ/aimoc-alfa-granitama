@@ -677,5 +677,16 @@
   "Pilih stockpile yang sesuai dengan SKU tersebut sebelum menyimpan.": "Choose a stockpile matching this SKU before saving.",
   "Stockpile otomatis mengikuti SKU pada crusher yang sama. Hasil ukur dan bukti perlu diisi ulang jika sumber berubah.": "Stockpile selection follows the SKU on the same crusher. Enter new measurements and evidence when the source changes.",
   "Belum ada stockpile aktif untuk SKU ini pada crusher yang sama. Hubungi Admin.": "No active stockpile for this SKU is available on the same crusher. Contact Admin.",
-  "Ada beberapa stockpile untuk SKU ini pada crusher yang sama. Pilih sumber yang akan diukur.": "Several stockpiles match this SKU on the same crusher. Choose the source to measure."
+  "Ada beberapa stockpile untuk SKU ini pada crusher yang sama. Pilih sumber yang akan diukur.": "Several stockpiles match this SKU on the same crusher. Choose the source to measure.",
+  "Versi permintaan saat formulir dibuka wajib dikirim.": "The request version captured when opening the form is required.",
+  "Permintaan sudah diperbarui. Muat ulang lalu buka kembali formulir.": "The request has changed. Refresh and reopen the form.",
+  "Field perubahan permintaan tidak dikenali.": "The request update contains unsupported fields.",
+  "Kirim SKU, kuantitas, dan satuan asli; hasil konversi ditentukan server.": "Send the original SKU, quantity and unit; conversions are calculated by the server.",
+  "Alasan pembatalan maksimal 500 karakter.": "The cancellation reason must be at most 500 characters.",
+  "Permintaan sudah dibatalkan.": "The request has already been cancelled.",
+  "Permintaan sudah direncanakan dispatch dan tidak dapat diubah atau dibatalkan.": "Dispatch has already been planned; this request cannot be edited or cancelled.",
+  "Aksi ini hanya tersedia untuk Admin.": "This action is available only to Admin.",
+  "Permintaan tidak mendukung perubahan pada alur ini.": "This request does not support changes in this workflow.",
+  "Permintaan tidak lagi menunggu perencanaan dispatch.": "The request is no longer awaiting dispatch planning.",
+  "Data versi permintaan perlu ditinjau sebelum perubahan.": "The request version data must be reviewed before making changes."
 }

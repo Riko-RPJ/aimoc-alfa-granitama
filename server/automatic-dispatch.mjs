@@ -81,7 +81,7 @@ export function refreshAutomaticDispatchProgress(s) {
     d.status = trips.length && d.completedTrips === trips.length ? 'completed' : trips.some(t => !['queued','waiting_truck'].includes(t.status)) ? 'in_progress' : 'planned';
     d.autoDispatch = automaticDispatchSummary(s,d.id);
   }
-  for (const r of s.requests.filter(r=>r.source===SOURCE)) {
+  for (const r of s.requests.filter(r=>r.source===SOURCE&&r.status!=='cancelled')) {
     const dispatches = s.dispatches.filter(d => d.requestId === r.id);
     r.deliveredM3 = round(dispatches.reduce((sum, d) => sum + (d.deliveredM3 || 0), 0));
     r.deliveredT = round(dispatches.reduce((sum, d) => sum + (d.deliveredT || 0), 0));

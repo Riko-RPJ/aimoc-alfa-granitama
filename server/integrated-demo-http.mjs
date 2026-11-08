@@ -15,6 +15,8 @@ const open=x=>!['returned','cancelled'].includes(x.status);
 // In particular, legacy depart/return and the anonymous truck-code sidecar do
 // not carry the Driver, QR or weigh-event identities required by this workflow.
 export function guardLegacyIntegratedMutation(state,action,payload={}) {
+  if(['request.update','request.cancel'].includes(action))
+    fail(409,'INTEGRATED_WORKFLOW_REQUIRED','Gunakan alur terpadu untuk transaksi ini.');
   if(action==='request.plan'&&state.automaticDispatchUpgrade?.version===1)
     fail(409,'AUTOMATIC_DISPATCH_REQUIRED','Perencanaan lama telah dinonaktifkan. Gunakan dispatch otomatis dari aplikasi.');
   const linked=[...(state.trips||[]),...(state.requests||[]),...(state.dispatches||[])];
@@ -110,7 +112,14 @@ export async function handleIntegratedDemo({db,path,method,req,actor,send,parseB
       if(previous.payload_hash!==payloadHash)fail(409,'IDEMPOTENCY_CONFLICT','ID aksi telah dipakai dengan isi berbeda.');
       return {...await context(c,actor),result:previous.result,replayed:true};
     }
-    if(body.expectedRevision!==undefined&&body.expectedRevision!==Number(row.revision))
+    // Request forms have a target-scoped compare-and-swap. Unrelated polling or
+    // demo ticks may advance the document while that request stays unchanged.
+    // Use the CURRENT locked document, never a form snapshot; only an older
+    // global revision may be superseded by the mandatory target revision.
+    const targetRequestCas=['request.update','request.cancel'].includes(body.action)&&
+      Number.isSafeInteger(payload.expectedRequestRevision)&&payload.expectedRequestRevision>=1;
+    const staleTargetCas=targetRequestCas&&body.expectedRevision<Number(row.revision);
+    if(body.expectedRevision!==undefined&&body.expectedRevision!==Number(row.revision)&&!staleTargetCas)
       fail(409,'REVISION_CONFLICT','Data telah diperbarui operator lain. Muat ulang lalu coba lagi.');
     const state=structuredClone(row.document),drivers=await driversFor(c);
     await guardLocationOperatorReferences(c,state,body.action,payload);

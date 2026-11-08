@@ -17,13 +17,16 @@ const scope=(u,role,id)=>{if(u?.role==='admin')return;if(u?.role!==role||!(u[rol
 const uid=prefix=>`${prefix}-${randomUUID()}`;
 const code=(prefix,list)=>`${prefix}-${String(list.length+1).padStart(5,'0')}`;
 const nextReceiptCode=s=>`RCV-${String(s.trips.reduce((max,t)=>{const match=/^RCV-(\d+)$/.exec(t.receiptCode||'');return match?Math.max(max,Number(match[1])):max;},0)+1).padStart(5,'0')}`;
-const record=(s,u,type,entityId,description)=>{
-  s.events.push({id:uid('evt'),at:now(),actorId:u.id,actorName:u.name||u.username||u.id,role:u.role,type,entityId,description});
+export function trimLegacyDisplayEvents(s){
   // Integrated event identities are retry receipts, not expendable UI history.
   // Bound only the legacy history; keep all integrated evidence in its order.
   const protectedEvent=e=>['INTEGRATED_DEMO','LEGACY_DEMO_RECONCILIATION'].includes(e.source);
   const legacy=s.events.filter(e=>!protectedEvent(e));
   if(legacy.length>1500){const expired=new Set(legacy.slice(0,legacy.length-1500));s.events=s.events.filter(e=>!expired.has(e));}
+}
+const record=(s,u,type,entityId,description)=>{
+  s.events.push({id:uid('evt'),at:now(),actorId:u.id,actorName:u.name||u.username||u.id,role:u.role,type,entityId,description});
+  trimLegacyDisplayEvents(s);
 };
 const erp=(s,type,entityId,payload)=>{s.erpOutbox.push({id:uid('erp'),createdAt:now(),type,entityId,status:'awaiting_configuration',system:'oracle_netsuite',payload});};
 const ledger=(s,u,type,stockpileId,volumeM3,referenceId)=>s.inventoryLedger.push({id:uid('led'),at:now(),actorId:u.id,type,stockpileId,volumeM3:r(volumeM3),referenceId});
