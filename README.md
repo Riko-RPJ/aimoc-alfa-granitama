@@ -18,6 +18,16 @@ Weights are operator-entered demo readings, not field-verified IoT measurements.
 
 Focused checks: `node --test --test-concurrency=1 tests/quarry-cilegon.test.mjs tests/quarry-cilegon-http.test.mjs tests/quarry-cilegon-erp.test.mjs`.
 
+### Parallel dispatch demonstration
+
+The public `/demo-flow` page plays a synthetic, deterministic event replay: four trucks collect the same SKU from two crushers for one jetty/vessel, with two serial trips per truck. It reads only `public/quarry-flow-replay.json`; Play, seek and QR inspection never issue operational commands or change shared inventory. Generate the fixture with `node scripts/generate-quarry-flow-replay.mjs`. The operations workspace also includes a live map based on persisted trip states, plus a separate step-by-step guide and downloadable PDF.
+
+New Cilegon plans may balance sufficient demand across available crusher sources and alternate initial truck allocations between those crushers. Each truck/Driver pair remains claimed by one unfinished dispatch, and its next trip remains serial. Existing dispatch allocations and non-Cilegon workflows are preserved. Available trucks alone are insufficient: active Drivers must also be free of older open assignments. The resource-readiness panel exposes this distinction without releasing historical work automatically.
+
+Alfa Driver/source task details link to the matching Cilegon trip and render its stable truck/dispatch QR. Jetty arrival and receipt remain independent Alfa actions. The QR renderer accepts only the two documented assignment-reference and quarry-dispatch-pass schemas; it rejects additional fields and arbitrary URLs.
+
+Focused parallel checks: `node --test --test-concurrency=1 tests/quarry-parallel-domain.test.mjs tests/quarry-parallel-http.test.mjs tests/quarry-dispatch-qr.test.mjs`.
+
 Source repository: https://github.com/Riko-RPJ/aimoc-alfa-granitama
 
 ## Interface languages

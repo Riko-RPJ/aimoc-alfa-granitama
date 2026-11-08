@@ -6,6 +6,7 @@ import { applyAction, DomainError } from './domain.mjs';
 import {ensureStockpileLocations, stockpileLocationsForRead, applyStockpileLocationAction, resolveStockpileDestination, ensureReceivingStockpilesForRequest} from './stockpile-locations.mjs';
 import {scheduleAutomaticDispatch,automaticDispatchSummary,truckAvailability,assertSerialDispatchClaims,refreshAutomaticDispatchProgress as aggregate} from './automatic-dispatch.mjs';
 import {QUARRY_CILEGON_WORKFLOW,isQuarryCilegon,quarryCilegonConfig,applyQuarryCilegonAction,quarryTripProjection,quarryErpFields} from './quarry-cilegon-domain.mjs';
+import {quarrySourceBudgets} from './quarry-source-budgets.mjs';
 export {allocateAutomaticDispatch,upgradeToAutomaticDispatch} from './automatic-dispatch.mjs';
 
 // This is an explicitly synthetic workflow over the existing operation document.
@@ -129,11 +130,17 @@ function planRequest(s, p, actor, options) {
     if (!product.active) fail('SKU nonaktif.', 'INACTIVE_SOURCE', 409);
     const target = marine ? null : destination(s, request, line.skuId, line.destinationStockpileId);
     const stocks = s.stockpiles.filter(stock => stock.active && stock.skuId === line.skuId && isDispatchSourceArea(row(s, 'crushers', stock.crusherId)) && (marine || stock.crusherId !== request.destinationId)).sort((a, b) => (b.onHandM3 - b.reservedM3) - (a.onHandM3 - a.reservedM3) || a.code.localeCompare(b.code));
+    const sourceCapacities=trucks.filter(truck=>Number.isFinite(truck.bedM3)&&truck.bedM3>0&&Number.isFinite(truck.payloadLimitT)&&truck.payloadLimitT>0).map(truck=>Math.min(truck.payloadLimitT,truck.bedM3*line.densityTPerM3));
+    // Source fan-out is useful only for parallel pairs and more than one load.
+    // A busy eligible pair still counts: waiting work keeps its source plan.
+    const balanceSources=isQuarryCilegon(request)&&sourceCapacities.length>=2&&new Set(driverCatalog(options.drivers).map(driver=>driver.id)).size>=2&&line.tonnageT>Math.max(...sourceCapacities)+EPS&&new Set(stocks.filter(stock=>stock.onHandM3>stock.reservedM3).map(stock=>stock.crusherId)).size>=2;
+    const sourceBudgets=balanceSources?quarrySourceBudgets(stocks,line):null;
+    if(balanceSources)dispatch.sourceAllocationMode='BALANCED_CRUSHERS';
     let remainingT = line.tonnageT;
     for (const stock of stocks) {
       const availableM3 = round(stock.onHandM3 - stock.reservedM3);
-      const sourceT = round(Math.min(remainingT, availableM3 * line.densityTPerM3));
-      const sourceBudgetM3 = round(Math.min(availableM3, sourceT / line.densityTPerM3));
+      const sourceT = sourceBudgets?(sourceBudgets.get(stock.id)?.tonnageT||0):round(Math.min(remainingT, availableM3 * line.densityTPerM3));
+      const sourceBudgetM3 = sourceBudgets?(sourceBudgets.get(stock.id)?.volumeM3||0):round(Math.min(availableM3, sourceT / line.densityTPerM3));
       const allocation = {stockpileId: stock.id, crusherId: stock.crusherId, skuId: line.skuId, volumeM3: 0, tonnageT: 0};
       if (sourceT > 0) {
         if (dispatch.tripIds.length >= 2000 || s.trips.length >= 20000) fail('Rencana melampaui batas 2.000 ritase.', 'TRIP_LIMIT', 409);

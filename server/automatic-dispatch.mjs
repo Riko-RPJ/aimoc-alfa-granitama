@@ -15,6 +15,16 @@ const audit=(s,actor,type,t,extra={})=>s.events.push({id:'evt-'+randomUUID(),at:
 const executing=t=>open(t)&&(!!t.startedAt||['loading','weighed','in_transit','arrived','unloaded','returning'].includes(t.status));
 const bySequence=(a,b)=>(a.sequence??0)-(b.sequence??0)||a.id.localeCompare(b.id);
 
+function nextWaitingTask(s,queue){
+ const first=queue[0],dispatch=s.dispatches.find(d=>d.id===first.dispatchId);
+ if(dispatch?.workflow!=='QUARRY_CILEGON'||dispatch.sourceAllocationMode!=='BALANCED_CRUSHERS')return first;
+ const counts=new Map();
+ for(const t of s.trips.filter(t=>t.dispatchId===dispatch.id&&t.truckId&&t.status!=='cancelled'))counts.set(t.crusherId,(counts.get(t.crusherId)||0)+1);
+ // Fan the first available pairs across crushers before filling serial tails.
+ // Resource choice and execution ordering still use the existing serial rules.
+ return queue.filter(t=>t.dispatchId===dispatch.id).sort((a,b)=>(counts.get(a.crusherId)||0)-(counts.get(b.crusherId)||0)||order(a)-order(b)||bySequence(a,b))[0];
+}
+
 /** Global claim classification; callers redact entity IDs only after computing it. */
 export function truckAvailability(s,truck){
  const claims=s.trips.filter(t=>open(t)&&t.truckId===truck.id).sort(bySequence);
@@ -89,7 +99,7 @@ export function scheduleAutomaticDispatch(s,options,actor){
  validateClaims(s);
  for(;;){
   const queue=waiting(s).filter(t=>!blocked.has(t.id));if(!queue.length)break;
-  const task=queue[0];
+  const task=nextWaitingTask(s,queue);
   if(evidence(task,s)||task.truckId||task.assignedDriverUserId||!valid(task.tonnageT)||!valid(task.volumeM3)||!valid(task.densityTPerM3))fail('Muatan menunggu mengandung assignment atau bukti eksekusi yang tidak konsisten.');
   const dispatch=s.dispatches.find(d=>d.id===task.dispatchId&&d.requestId===task.requestId&&d.source===SOURCE);
   if(!dispatch||!dispatch.tripIds.includes(task.id))fail('Muatan menunggu tidak terhubung pada dispatch kanonis.');
