@@ -34,7 +34,11 @@ The public `/demo-flow` page plays a synthetic, deterministic event replay: four
 
 New Cilegon plans may balance sufficient demand across available crusher sources and alternate initial truck allocations between those crushers. Each truck/Driver pair remains claimed by one unfinished dispatch, and its next trip remains serial. Existing dispatch allocations and non-Cilegon workflows are preserved. Available trucks also require a free real Driver or an eligible simulated slot in explicit demo mode. The resource-readiness panel distinguishes real accounts, simulator slots and the effective dispatch quota.
 
-Alfa Driver/source task details link to the matching Cilegon trip and render its stable truck/dispatch QR. Jetty arrival and receipt remain independent Alfa actions. The QR renderer accepts only the two documented assignment-reference and quarry-dispatch-pass schemas; it rejects additional fields and arbitrary URLs.
+Alfa Driver/source task details link to the matching Cilegon trip and render its stable truck/dispatch QR. Jetty arrival and receipt remain independent Alfa actions.
+
+Driver and Admin use one canonical pass per truck, dispatch and assigned Driver across all serial trips, including trips with different source stockpiles. The primary `qr` and `dispatchPass` values agree. Generic work uses `AIMOC_DISPATCH_PASS`; Quarry retains its existing `AIMOC_QUARRY_DISPATCH_PASS` bytes. Current trip, source, SKU, scan stage and receipt stay in separate validated bindings. The Driver entry opens the pass at dispatch level while showing the current trip separately. Opening or refreshing a pass does not record a scan.
+
+Exact legacy `AIMOC_ASSIGNMENT_REFERENCE` values remain available as `legacyQr` for cached scan payloads. Original event IDs, bindings and payload fingerprints remain unchanged during retries. New UI renders the stable pass; the renderer accepts only the documented exact reference schemas and rejects additional fields or arbitrary URLs. Stored weights, receipts, inventory and ERP intents are not rewritten for this display change.
 
 Focused parallel checks: `node --test --test-concurrency=1 tests/quarry-parallel-domain.test.mjs tests/quarry-parallel-http.test.mjs tests/quarry-dispatch-qr.test.mjs`.
 

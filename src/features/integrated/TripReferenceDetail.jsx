@@ -3,6 +3,7 @@ import {Clock3,Loader2,Package,QrCode,RefreshCw,Truck,Wifi,WifiOff} from 'lucide
 import {Button,Modal} from '../../components/ui/index.jsx';
 import {useLanguage} from '../../i18n.js';
 import {AssignmentQr} from './AssignmentQr.jsx';
+import {assignmentReferenceMatchesTrip} from './dispatch-qr-reference.mjs';
 import './trip-reference-detail.css';
 
 const list=value=>Array.isArray(value)?value:[];
@@ -25,10 +26,7 @@ export function selectTripReference(detail,requestId,tripId){
 export function hasAssignmentQr(reference){
  const trip=reference?.trip,qr=trip?.qr;
  if(!reference?.dispatch||!trip||waiting.has(trip.status)||!validId(trip.id)||!validId(trip.requestId)||!validId(trip.dispatchId)||!validId(trip.truckId)||!validId(trip.assignedDriverUserId)||trip.assignedDriver?.id!==trip.assignedDriverUserId||typeof qr?.value!=='string'||qr.isAuthorization!==false||qr.physicalScan!==false)return false;
- try{
-  const value=JSON.parse(qr.value);
-  return value?.v===1&&value.type==='AIMOC_ASSIGNMENT_REFERENCE'&&value.requestId===trip.requestId&&value.dispatchId===trip.dispatchId&&value.tripId===trip.id&&value.truckId===trip.truckId;
- }catch{return false;}
+ return assignmentReferenceMatchesTrip(qr.value,trip);
 }
 
 /** Wait for context and detail to agree before showing a changed truck's QR. */
@@ -87,6 +85,7 @@ export function TripReferenceDetail({trip,L,source,destination,truck,product,fmt
  const allocated=latest?Boolean(latest.truckId)&&!waiting.has(latest.status):Boolean(trip?.truckId)&&!waiting.has(trip?.status);
  const truckRecord=typeof truck==='function'?truck(current.truckId):null;
  const productRecord=typeof product==='function'?product(current.skuId):null;
+ const dispatchCode=label(selected?.dispatch?.code);
  const truckCode=label(latest?latest.truckCode:truckRecord?.code),plate=label(latest?latest.plate:truckRecord?.plate);
  const sourceText=[label(latest?.sourceCrusherCode),label(latest?.sourceStockpileCode)].filter(Boolean).join(' / ')||label(typeof source==='function'?source(current):null);
  const land=current.transferMode==='LAND'||(!current.vesselId&&Boolean(current.destinationId||current.destinationCrusherId));
@@ -115,7 +114,7 @@ export function TripReferenceDetail({trip,L,source,destination,truck,product,fmt
    <div className="trd-loads"><div><small>{L('Volume rencana ritase','Trip planned volume')}</small><b>{format(current.volumeM3)} <span>m³</span></b></div><div><small>{L('Tonase rencana ritase','Trip planned tonnage')}</small><b>{format(current.tonnageT)} <span>t</span></b></div></div>
    <section className="trd-qr-panel" data-testid="trip-assignment-qr" aria-label={L('QR penugasan truk','Allocated truck QR')}>
     <div className="trd-qr-heading"><span><QrCode size={20}/></span><div><h3>{L('QR per truk yang dialokasikan','QR for the allocated truck')}</h3><p>{L('Sesuai penugasan pada ritase ini.','Matches the assignment on this trip.')}</p></div></div>
-    {hasQr?<div className="trd-qr-content"><span className={`trd-qr-tag ${historical?'historical':''}`}>{historical?L('QR historis · arsip ritase','Historical QR · trip archive'):L('QR referensi penugasan','Assignment reference QR')}</span><AssignmentQr value={latest.qr.value} label={`${L('QR ritase','Trip QR')} ${label(latest.code)||''} · ${truckCode||L('Truk dialokasikan','Allocated truck')}`}/><b>{truckCode} · {label(latest.code)}</b></div>:<div className="trd-qr-empty" role="status">{loading&&!selected?<Loader2 size={26} className="spin"/>:!allocated?<Truck size={28}/>:stale?<WifiOff size={26}/>:<Package size={27}/>}<b>{loading&&!selected?L('Memuat QR dari server…','Loading QR from server…'):stale?L('QR menunggu sinkronisasi','QR awaiting synchronization'):!allocated?L('Belum ada QR · menunggu truk','No QR yet · awaiting truck'):L('QR belum tersedia','QR unavailable')}</b><p>{stale?L('Muat ulang rincian untuk memastikan QR sesuai penugasan terbaru.','Refresh the details to confirm the QR matches the latest assignment.'):!allocated?L('QR akan tampil setelah alokasi penugasan lengkap.','The QR will appear after allocation is complete.'):L('Referensi penugasan belum lengkap atau belum tersedia dari server.','The assignment reference is incomplete or unavailable from the server.')}</p></div>}
+    {hasQr?<div className="trd-qr-content"><span className={`trd-qr-tag ${historical?'historical':''}`}>{historical?L('QR dispatch · konteks riwayat','Dispatch QR · historical context'):L('QR dispatch · seluruh ritase','Dispatch QR · all trips')}</span><AssignmentQr value={latest.qr.value} label={`${L('QR dispatch','Dispatch QR')} · ${dispatchCode||''} · ${truckCode||L('Truk dialokasikan','Allocated truck')}`}/><b>{truckCode} · {dispatchCode}</b></div>:<div className="trd-qr-empty" role="status">{loading&&!selected?<Loader2 size={26} className="spin"/>:!allocated?<Truck size={28}/>:stale?<WifiOff size={26}/>:<Package size={27}/>}<b>{loading&&!selected?L('Memuat QR dari server…','Loading QR from server…'):stale?L('QR menunggu sinkronisasi','QR awaiting synchronization'):!allocated?L('Belum ada QR · menunggu truk','No QR yet · awaiting truck'):L('QR belum tersedia','QR unavailable')}</b><p>{stale?L('Muat ulang rincian untuk memastikan QR sesuai penugasan terbaru.','Refresh the details to confirm the QR matches the latest assignment.'):!allocated?L('QR akan tampil setelah alokasi penugasan lengkap.','The QR will appear after allocation is complete.'):L('Referensi penugasan belum lengkap atau belum tersedia dari server.','The assignment reference is incomplete or unavailable from the server.')}</p></div>}
    </section>
    {current.driverScan?.quantityBasis==='PLANNED_DEMO'&&current.driverScan?.measurementPending===true&&<div className="trd-footer" data-testid="trip-planned-demo-note"><Clock3 size={15}/><span>{L('Dua scan demo memakai kuantitas rencana dispatch. Bukti timbang lapangan masih menunggu verifikasi.','The two demo scans use planned dispatch quantities. Field weighing evidence still awaits verification.')}</span></div>}
    <div className="trd-footer"><Clock3 size={15}/><span>{current.driverScan?.mode==='TWO_SCAN_PLANNED_DEMO'?L('Rincian diperbarui otomatis dari pemindaian Driver dan catatan transaksi bersama.','Details refresh automatically from Driver scans and shared transaction records.'):L('Rincian diperbarui otomatis. Pemindaian dan pencatatan operasional dilakukan melalui aplikasi petugas.','Details refresh automatically. Scanning and operational records are handled in the operator application.')}</span></div>

@@ -33,7 +33,8 @@ test('Driver and Admin use bit-identical canonical QR bytes and expose only the 
  const adminDto=driverAssignmentQr(state,admin,{tripId:target.id,drivers});
  const driverDto=driverAssignmentQr(state,driver1,{tripId:target.id,drivers});
  assert.equal(driverDto.qr.value,canonical.qr.value);assert.equal(driverDto.qr.value,adminDto.qr.value);
- assert.deepEqual(JSON.parse(driverDto.qr.value),{v:1,type:'AIMOC_ASSIGNMENT_REFERENCE',requestId:target.requestId,dispatchId:target.dispatchId,tripId:target.id,truckId:target.truckId});
+ assert.deepEqual(JSON.parse(driverDto.qr.value),{v:1,type:'AIMOC_DISPATCH_PASS',requestId:target.requestId,dispatchId:target.dispatchId,truckId:target.truckId,assignedDriverUserId:driver1.id});
+ assert.deepEqual(JSON.parse(driverDto.legacyQr.value),{v:1,type:'AIMOC_ASSIGNMENT_REFERENCE',requestId:target.requestId,dispatchId:target.dispatchId,tripId:target.id,truckId:target.truckId});
  assert.deepEqual(driverDto.binding,{requestId:target.requestId,dispatchId:target.dispatchId,tripId:target.id,truckId:target.truckId,sourceStockpileId:target.stockpileId,sourceCrusherId:target.crusherId,skuId:target.skuId,assignedDriverUserId:driver1.id});
  assert.equal(driverDto.qrReferenceOnly,true);assert.equal(driverDto.scanRecorded,false);assert.equal(driverDto.authorizationGranted,false);
  assert.equal(driverDto.qr.isAuthorization,false);assert.equal(driverDto.qr.physicalScan,false);assert.equal(driverDto.canOpenTask,false);assert.equal(driverDto.canOpenTaskDeprecated,true);

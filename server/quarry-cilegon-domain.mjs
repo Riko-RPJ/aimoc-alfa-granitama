@@ -1,6 +1,8 @@
 import {randomUUID,createHash} from 'node:crypto';
 import {DomainError} from './domain.mjs';
 import {assertSerialDispatchClaims} from './automatic-dispatch.mjs';
+import {quarryDispatchPass,legacyTripAssignmentQr} from '../shared/dispatch-pass.mjs';
+export {quarryDispatchPass} from '../shared/dispatch-pass.mjs';
 
 export const QUARRY_CILEGON_WORKFLOW='QUARRY_CILEGON';
 const SOURCE='INTEGRATED_DEMO',EPS=0.00001;
@@ -45,11 +47,7 @@ function assignment(state,trip,drivers){
   if(request.jettyId!==trip.jettyId||dispatch.jettyId!==trip.jettyId||request.vesselId!==trip.vesselId||dispatch.vesselId!==trip.vesselId)fail('Tujuan kapal tidak sesuai dispatch.','QUARRY_BINDING_INVALID');
   return {request,dispatch,truck,stock};
 }
-const expectedQr=trip=>JSON.stringify({v:1,type:'AIMOC_ASSIGNMENT_REFERENCE',requestId:trip.requestId,dispatchId:trip.dispatchId,tripId:trip.id,truckId:trip.truckId});
-export function quarryDispatchPass(trip){
-  if(!trip.truckId||!trip.assignedDriverUserId||!trip.dispatchId)return null;
-  return {value:JSON.stringify({v:1,type:'AIMOC_QUARRY_DISPATCH_PASS',dispatchId:trip.dispatchId,truckId:trip.truckId,assignedDriverUserId:trip.assignedDriverUserId}),isAuthorization:false,physicalScan:false,scope:'TRUCK_DISPATCH',dispatchId:trip.dispatchId,truckId:trip.truckId,assignedDriverUserId:trip.assignedDriverUserId};
-}
+const expectedQr=trip=>legacyTripAssignmentQr(trip)?.value;
 
 /** A return QR cannot provide this proof: only destination receive creates it. */
 export function quarryHasJettyReceipt(state,trip){

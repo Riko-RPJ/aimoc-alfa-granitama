@@ -204,15 +204,21 @@ Completion counts verified returns during today, irrespective of the original
 assignment date. Unloading alone does not complete a trip. Invalid date evidence
 makes the affected metric unavailable rather than inventing a zero. The read
 projection never persists the summary or exposes it to other roles. Driver
-Overview omits the fleet-status and workflow-information cards; operator actions,
-task lists, assignment QR and other roles' overviews are unchanged.
+Overview presents the dispatch pass once per truck–Driver assignment, alongside
+its serial trip rows and daily metrics.
 
 The Admin Dispatch & Trips table separates dispatch, trip, truck, source,
 destination and the SKU's planned trip quantity. Admin Details is read-only:
-assignment QR values come from the request-detail endpoint and must match the
-current request/trip/dispatch/truck tuple. Waiting cargo has no QR; historical
-QRs are labelled, and stale or mismatching references are hidden. Driver and
-location-operator workspaces retain their role-scoped operational actions.
+assignment QR values come from the request-detail endpoint. Primary `qr` and
+`dispatchPass` have the same stable value for a truck, assigned Driver and
+dispatch across all its trips and source stockpiles. Generic passes use
+`AIMOC_DISPATCH_PASS`; Quarry keeps `AIMOC_QUARRY_DISPATCH_PASS`. The active trip,
+source, SKU, actor and scan stage remain separately validated in `binding`.
+Waiting cargo has no QR; historical references are labelled, and stale or
+mismatching bindings are hidden. Exact old per-trip references are exposed as
+`legacyQr` for cached scan intents. Their original event fingerprints and
+idempotent retries are preserved. Reads and trip-context changes do not record
+scans. Driver and location-operator actions remain role-scoped.
 The explicit Admin QR scan test is available under Audit & NetSuite, outside
 Details; it retains the existing Admin-only command and simulation provenance.
 
