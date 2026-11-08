@@ -34,7 +34,7 @@ function fixture() {
   return {state, act, requestA, requestB, planA, planB};
 }
 
-test('selected request detail never mixes another request and groups a truck once with per-trip QR references', () => {
+test('selected request detail never mixes another request and groups a truck once with one stable dispatch QR', () => {
   const {state, requestA, requestB, planA, planB} = fixture();
   const detail = requestDetail(state, admin, {requestId: requestA, drivers});
   assert.equal(detail.source, 'INTEGRATED_DEMO');
@@ -48,9 +48,11 @@ test('selected request detail never mixes another request and groups a truck onc
   assert.ok(twice);
   assert.equal(twice.assignedDriver.id, driver1.id);
   assert.equal(twice.summary.plannedT, 80);
-  assert.notEqual(twice.trips[0].qr.value, twice.trips[1].qr.value);
+  assert.equal(twice.trips[0].qr.value, twice.trips[1].qr.value);
+  assert.notEqual(twice.trips[0].legacyQr.value, twice.trips[1].legacyQr.value);
   for (const trip of detail.trips) {
-    assert.deepEqual(JSON.parse(trip.qr.value), {v: 1, type: 'AIMOC_ASSIGNMENT_REFERENCE', requestId: requestA, dispatchId: planA.dispatchIds[0], tripId: trip.id, truckId: trip.truckId});
+    assert.deepEqual(JSON.parse(trip.qr.value), {v: 1, type: 'AIMOC_DISPATCH_PASS', requestId: requestA, dispatchId: planA.dispatchIds[0], truckId: trip.truckId, assignedDriverUserId: trip.assignedDriverUserId});
+    assert.deepEqual(JSON.parse(trip.legacyQr.value), {v: 1, type: 'AIMOC_ASSIGNMENT_REFERENCE', requestId: requestA, dispatchId: planA.dispatchIds[0], tripId: trip.id, truckId: trip.truckId});
     assert.equal(trip.qr.isAuthorization, false);
     assert.equal(trip.qr.physicalScan, false);
     assert.equal(trip.qr.historical, false);
@@ -157,7 +159,7 @@ test('invalid cross-request dispatch reference cannot expose another dispatch or
   assert.ok(!JSON.stringify(detail).includes(planB.dispatchIds[0]));
 });
 
-test('actual dispatch publishes three distinct serial QR references while another dispatch waits for final return', () => {
+test('actual dispatch publishes one stable pass across three serial trips while another dispatch waits for final return', () => {
   const state = createSeed(), catalog = [driver1];
   state.trucks = state.trucks.slice(0, 1).map(truck => ({...truck, bedM3: 30, payloadLimitT: 40}));
   const act = (action, payload, actor = admin) => applyIntegratedAction(state, action, payload, actor, {drivers: catalog});
@@ -176,7 +178,8 @@ test('actual dispatch publishes three distinct serial QR references while anothe
   const initial = snapshot();
   assert.equal(initial.summary.assignedTrips, 3);
   assert.equal(initial.summary.waitingTrips, 0);
-  assert.equal(new Set(initial.trips.map(trip=>trip.qr.value)).size,3);
+  assert.equal(new Set(initial.trips.map(trip=>trip.qr.value)).size,1);
+  assert.equal(new Set(initial.trips.map(trip=>trip.legacyQr.value)).size,3);
   const initialWaiting=requestDetail(state,admin,{requestId:waitingRequest,drivers:catalog});
   assert.equal(initialWaiting.summary.assignedTrips,0);assert.equal(initialWaiting.waitingLoads[0].tonnageT,80);assert.equal(initialWaiting.waitingLoads[0].qr,null);
   const completedIds = [];
@@ -186,7 +189,9 @@ test('actual dispatch publishes three distinct serial QR references while anothe
     assert.equal(current.tonnageT, 40);
     assert.equal(current.assignedDriverUserId, driver1.id);
     const reference = before.trips.find(trip => trip.id === current.id).qr;
-    assert.equal(JSON.parse(reference.value).tripId, current.id);
+    assert.equal(Object.hasOwn(JSON.parse(reference.value),'tripId'), false);
+    assert.equal(JSON.parse(reference.value).assignedDriverUserId, driver1.id);
+    assert.equal(JSON.parse(before.trips.find(trip=>trip.id===current.id).legacyQr.value).tripId,current.id);
     assert.equal(JSON.parse(reference.value).truckId, 'truck-1');
     const futureBefore=before.trips.filter(trip=>trip.status==='queued'&&trip.id!==current.id);
     const tripId = current.id;
@@ -197,7 +202,7 @@ test('actual dispatch publishes three distinct serial QR references while anothe
     act('trip.gross', {tripId, weightT: 55});
     for (const action of ['depart', 'arrive', 'receive']) act(`trip.${action}`, {tripId});
     // Receipt never releases the truck claim. Preassigned future references
-    // remain distinct and cannot be started before the current task returns.
+    // retain their stable pass and cannot start before the current task returns.
     let received = snapshot();
     assert.equal(received.trips.filter(trip => trip.status === 'queued').length, 2-cycle);
     for(const future of futureBefore){assert.equal(received.trips.find(trip=>trip.id===future.id).qr.value,future.qr.value);assert.throws(()=>act('trip.start',{tripId:future.id},driver1),error=>error.code==='TRUCK_OR_DRIVER_BUSY'||error.code==='QUEUE_ORDER');}

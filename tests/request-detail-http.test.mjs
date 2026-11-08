@@ -36,8 +36,8 @@ test('authenticated request detail is request-scoped, read-only and never create
  assert.equal(admin.body.request.id,a);assert.equal(admin.body.trips.length,3);assert.equal(admin.body.truckAssignments.length,2);assert.equal(admin.body.waitingLoads.length,0);
  assert.ok(admin.body.trips.every(x=>x.requestId===a));assert.ok(admin.body.dispatches.every(x=>x.requestId===a));
  assert.ok(!JSON.stringify(admin.body).includes(b));assert.equal(admin.body.summary.plannedT,80);
- const codes=admin.body.truckAssignments.flatMap(group=>group.trips.map(x=>x.qr.value));assert.equal(new Set(codes).size,3);
- for(const value of codes){const q=JSON.parse(value);assert.equal(q.requestId,a);assert.equal(q.type,'AIMOC_ASSIGNMENT_REFERENCE');assert.ok(admin.body.trips.some(x=>x.id===q.tripId&&x.truckId===q.truckId));}
+ const codes=admin.body.truckAssignments.flatMap(group=>group.trips.map(x=>x.qr.value));assert.equal(new Set(codes).size,2);
+ for(const value of codes){const q=JSON.parse(value);assert.equal(q.requestId,a);assert.equal(q.type,'AIMOC_DISPATCH_PASS');assert.equal(Object.hasOwn(q,'tripId'),false);assert.ok(admin.body.trips.some(x=>x.dispatchId===q.dispatchId&&x.truckId===q.truckId&&x.assignedDriverUserId===q.assignedDriverUserId));}
  const second=await call(b,'admin');assert.equal(second.status,200);assert.ok(second.body.trips.every(x=>x.requestId===b));assert.ok(!JSON.stringify(second.body).includes(a));
  assert.equal(second.body.waitingLoads.length,1);assert.equal(second.body.waitingLoads[0].id,waiting.id);assert.equal(second.body.waitingLoads[0].qr,null);assert.equal(second.body.truckAssignments.length,0);
  assert.equal((await call(a,'jetty2')).status,404);assert.equal((await call(b,'jetty1')).status,404);assert.equal((await call(a,'jetty1')).status,200);

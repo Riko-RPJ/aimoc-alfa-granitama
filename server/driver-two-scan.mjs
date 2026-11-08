@@ -131,7 +131,7 @@ export function applyDriverScan(state,payload,actor,options={}){
  if(trip.workflow==='QUARRY_CILEGON')fail('Gunakan alur gerbang dan penerimaan jetty Quarry Cilegon.','QUARRY_GATE_REQUIRED');
  if(actor?.role!=='driver'||trip.assignedDriverUserId!==actor.id||actor.active===false||actor.disabled===true||!(options.drivers||[]).some(user=>user.id===actor.id&&user.role==='driver'&&user.active!==false&&user.disabled!==true))fail('Hanya Driver aktif yang ditugaskan dapat mengonfirmasi scan.','DRIVER_SCAN_FORBIDDEN',403);
  const descriptor=driverAssignmentQr(state,actor,{tripId:trip.id,drivers:options.drivers});
- if(payload.qrValue!==descriptor.qr.value||fingerprint(payload.binding)!==fingerprint(descriptor.binding))fail('QR atau penugasan telah berubah. Muat ulang QR ritase.','DRIVER_SCAN_BINDING_INVALID');
+ if(![descriptor.qr.value,descriptor.legacyQr?.value].includes(payload.qrValue)||fingerprint(payload.binding)!==fingerprint(descriptor.binding))fail('QR atau penugasan telah berubah. Muat ulang QR ritase.','DRIVER_SCAN_BINDING_INVALID');
  const eventFingerprint=fingerprint({action:'trip.driver_scan',payload:{...payload,externalEventId:undefined}});
  const prior=state.events.find(event=>event.source===SOURCE&&event.externalEventId===payload.externalEventId);
  if(prior){if(prior.type!=='trip.driver_scan'||prior.entityId!==trip.id||prior.actorId!==actor.id||prior.eventFingerprint!==eventFingerprint)fail('ID event scan telah digunakan dengan isi berbeda.','EVENT_CONFLICT');return {...prior.scanResult,replayed:true};}

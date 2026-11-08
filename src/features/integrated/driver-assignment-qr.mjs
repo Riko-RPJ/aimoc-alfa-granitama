@@ -1,3 +1,4 @@
+import {assignmentReferenceMatchesTrip} from './dispatch-qr-reference.mjs';
 const waiting=new Set(['waiting_truck','waiting_driver','waiting_assignment','awaiting_assignment','unassigned']);
 const terminal=new Set(['returned','completed','cancelled']);
 const id=value=>typeof value==='string'&&/^[A-Za-z0-9_-]{1,100}$/.test(value);
@@ -14,7 +15,8 @@ export function selectDriverAssignmentQr(data,expectedTrip,driverUserId){
  const rowSource={sourceStockpileId:expectedTrip.sourceStockpileId||expectedTrip.stockpileId,sourceCrusherId:expectedTrip.sourceCrusherId||expectedTrip.crusherId,skuId:expectedTrip.skuId};
  if(Object.entries(rowSource).some(([key,value])=>value!=null&&binding[key]!==value)||trip.sourceStockpileId&&binding.sourceStockpileId!==trip.sourceStockpileId||trip.sourceCrusherId&&binding.sourceCrusherId!==trip.sourceCrusherId)return null;
  if(typeof qr.value!=='string'||qr.value!==trip.qr?.value||qr.isAuthorization!==false||qr.physicalScan!==false||trip.qr?.isAuthorization!==false||trip.qr?.physicalScan!==false)return null;
- try{const reference=JSON.parse(qr.value),keys=['v','type','requestId','dispatchId','tripId','truckId'];if(!reference||Object.keys(reference).length!==keys.length||!keys.every(key=>Object.hasOwn(reference,key))||reference.v!==1||reference.type!=='AIMOC_ASSIGNMENT_REFERENCE'||!same(reference,binding,['requestId','dispatchId','tripId','truckId']))return null;}catch{return null;}
+ if(!assignmentReferenceMatchesTrip(qr.value,{...binding,id:binding.tripId}))return null;
+ for(const descriptor of [data.dispatchPass,trip.dispatchPass].filter(Boolean)){if(descriptor.value!==qr.value||descriptor.isAuthorization!==false||descriptor.physicalScan!==false)return null;}
  const historical=data.historical===true||qr.historical===true||terminal.has(trip.status);
  return {trip,request:data.request,dispatch:data.dispatch,binding,qr,historical,driverScan:trip.driverScan||null};
 }
@@ -38,4 +40,11 @@ export function buildDriverScanIntent(assignment,expectedStage,externalEventId){
 
 export function driverAssignmentIdentity(trip,driverUserId){
  return [driverUserId,trip?.requestId,trip?.dispatchId,trip?.id,trip?.truckId,trip?.assignedDriverUserId,trip?.sourceStockpileId||trip?.stockpileId,trip?.sourceCrusherId||trip?.crusherId,trip?.skuId].map(value=>String(value||'')).join(':');
+}
+
+export const driverDispatchKey=trip=>[trip?.dispatchId,trip?.truckId,trip?.assignedDriverUserId].every(id)?[trip.dispatchId,trip.truckId,trip.assignedDriverUserId].join(':'):'';
+/** Driver-owned stable pass groups; source/SKU/current trip stay outside QR identity. */
+export function driverDispatchBindings(trips,driverUserId){
+ const groups=new Map();for(const trip of Array.isArray(trips)?trips:[]){if(trip.assignedDriverUserId!==driverUserId)continue;const key=driverDispatchKey(trip);if(!key)continue;if(!groups.has(key))groups.set(key,{key,dispatchId:trip.dispatchId,truckId:trip.truckId,assignedDriverUserId:driverUserId,trips:[]});groups.get(key).trips.push(trip);}
+ return [...groups.values()].map(group=>{group.trips.sort((a,b)=>(a.sequence||0)-(b.sequence||0)||String(a.id).localeCompare(String(b.id)));return {...group,head:group.trips.find(trip=>!terminal.has(trip.status))||group.trips.at(-1)};});
 }
