@@ -1,6 +1,7 @@
 import { randomUUID, createHash } from 'node:crypto';
 import {isDispatchSourceArea} from '../shared/inventory-areas.mjs';
 import {summarizeDriverDailyTrips} from './driver-daily-summary.mjs';
+import {summarizeAdminSidebarNotifications} from './admin-sidebar-notifications.mjs';
 import {applyDriverScan,driverScanProgress,DRIVER_TWO_SCAN_MODE} from './driver-two-scan.mjs';
 import {DomainError,trimLegacyDisplayEvents} from './domain.mjs';
 import {requestLifecycle,requestRevision,assertRequestChange} from './request-lifecycle.mjs';
@@ -367,6 +368,7 @@ export function integratedView(state, actor, options = {}) {
   options={...options,drivers:effectiveFleetDrivers(state,options.drivers)};
   const view = structuredClone(state);
   delete view.driverDailySummary;
+  delete view.adminSidebarNotifications;
   view.stockpileLocations = stockpileLocationsForRead(state);
   const allTrips = state.trips;
   const fleet = state.trucks.map(truck => {
@@ -478,6 +480,7 @@ export function integratedView(state, actor, options = {}) {
   for (const vessel of view.vessels) vessel.remainingT = round(vessel.payloadLimitT - vessel.loadedT - vessel.reservedT);
   view.access = {role: actor.role, crusherIds: actor.crusherIds || [], jettyIds: actor.jettyIds || []};
   if(actor.role==='driver')view.driverDailySummary=summarizeDriverDailyTrips(state,actor,{now:options.now,includeCarryover:true});
+  if(actor.role==='admin')view.adminSidebarNotifications=summarizeAdminSidebarNotifications(view,actor);
   view.erpStatus = 'awaiting_configuration';
   return view;
 }

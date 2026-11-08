@@ -279,6 +279,7 @@ export function applyAction(s,action,p={},u){
 
 export function publicState(s,u){
   const view=structuredClone(s);
+  delete view.adminSidebarNotifications;
   if(u.role!=='admin')delete view.automaticDispatchUpgrade;
   if(u.role==='stock'){
     const ids=new Set(u.crusherIds||[]);view.crushers=view.crushers.filter(x=>ids.has(x.id));view.stockpiles=view.stockpiles.filter(x=>ids.has(x.crusherId));view.trips=view.trips.filter(x=>ids.has(x.crusherId));view.measurements=view.measurements.filter(x=>ids.has(x.crusherId));const stocks=new Set(view.stockpiles.map(x=>x.id));view.inventoryLedger=view.inventoryLedger.filter(x=>stocks.has(x.stockpileId));
