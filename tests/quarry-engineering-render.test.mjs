@@ -122,6 +122,9 @@ test('launch URL carries the selected preview method and UI language',()=>{
   assert.equal(url.searchParams.get('model'),model);
   assert.equal(url.searchParams.get('lang'),lang);
  }
+ const fallback=new URL(quarryEngineeringUrl('UNKNOWN&model=STATIC_STATIC','fr'),'https://quarry.test');
+ assert.equal(fallback.searchParams.has('model'),false,'Unsupported input follows the saved model');
+ assert.equal(fallback.searchParams.get('lang'),'id');
 });
 
 test('legacy method routes render a matching 3D link and both launch points use the same handoff',async()=>{
