@@ -1,5 +1,6 @@
 import {integratedView} from './integrated-demo-domain.mjs';
 import {requestDetail} from './request-detail.mjs';
+import {effectiveFleetDrivers} from './fleet-simulation.mjs';
 
 const validId=value=>typeof value==='string'&&/^[A-Za-z0-9_-]{1,100}$/.test(value);
 const fail=(message,code,status)=>{throw Object.assign(new Error(message),{code,status});};
@@ -20,7 +21,7 @@ const waiting=new Set(['waiting_truck','waiting_driver','waiting_assignment','aw
 export function driverAssignmentQr(state,actor,{tripId,drivers=[]}={}){
  if(!validId(tripId))fail('ID ritase tidak valid.','INVALID_TRIP_ID',400);
  if(!actor?.id||!['admin','stock','jetty','driver'].includes(actor.role)||actor.active===false)fail('Akun tidak berwenang.','FORBIDDEN',403);
- const catalog=Array.isArray(drivers)?drivers:[];
+ const catalog=effectiveFleetDrivers(state,drivers);
  const view=integratedView(state,actor,{drivers:catalog});
  const visible=view.trips.find(trip=>trip.id===tripId);
  const trip=one(state,'trips',tripId);

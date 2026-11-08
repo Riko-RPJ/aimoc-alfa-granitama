@@ -1,4 +1,5 @@
 import {integratedView} from './integrated-demo-domain.mjs';
+import {effectiveFleetDrivers} from './fleet-simulation.mjs';
 
 const validId = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(value);
 const fail = (message, code, status) => {throw Object.assign(new Error(message), {code, status});};
@@ -37,7 +38,7 @@ function locationFields(record) {
  */
 export function requestDetail(state, actor, {requestId, drivers = []} = {}) {
   if (!validId(requestId)) fail('ID permintaan tidak valid.', 'INVALID_REQUEST_ID', 400);
-  const catalog = Array.isArray(drivers) ? drivers : [];
+  const catalog = effectiveFleetDrivers(state,drivers);
   const view = integratedView(state, actor, {drivers: catalog});
   const canonicalRequest = view.requests.find(request => request.id === requestId);
   if (!canonicalRequest) fail('Permintaan tidak ditemukan.', 'NOT_FOUND', 404);

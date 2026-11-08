@@ -1,5 +1,6 @@
 import {randomUUID,createHash} from 'node:crypto';
 import {DomainError} from './domain.mjs';
+import {effectiveFleetDrivers,isSimulatedFleetDriver,fleetSimulationEnabled,FLEET_POLICY_MODE} from './fleet-simulation.mjs';
 
 const SOURCE='INTEGRATED_DEMO', EPS=0.00001;
 const round=n=>Math.round(n*1e6)/1e6;
@@ -7,7 +8,7 @@ const open=t=>!['returned','cancelled'].includes(t.status);
 const valid=n=>typeof n==='number'&&Number.isFinite(n)&&n>0;
 const now=()=>new Date().toISOString();
 const fail=(message,code='AUTO_DISPATCH_REVIEW_REQUIRED')=>{throw new DomainError(message,code,409);};
-const drivers=options=>(Array.isArray(options.drivers)?options.drivers:[]).filter(d=>d.id&&d.role==='driver'&&d.active!==false&&d.disabled!==true).sort((a,b)=>String(a.username||a.id).localeCompare(String(b.username||b.id)));
+const drivers=(state,options)=>effectiveFleetDrivers(state,options.drivers).filter(d=>d.id&&d.role==='driver'&&d.active!==false&&d.disabled!==true).sort((a,b)=>String(a.username||a.id).localeCompare(String(b.username||b.id)));
 const order=t=>t.queueSequence??t.sequence??0;
 const waiting=s=>s.trips.filter(t=>t.source===SOURCE&&t.status==='waiting_truck').sort((a,b)=>order(a)-order(b)||(a.sequence??0)-(b.sequence??0)||a.id.localeCompare(b.id));
 const evidence=(t,s)=>Object.entries(t).some(([k,v])=>/^(startedAt$|tare|gross|netT$|qr|weigh|departed|arrived|received|receipt|unloaded|returned|returnStarted)/i.test(k)&&v!==undefined&&v!==null&&v!==false&&v!==''&&!(Array.isArray(v)&&v.length===0))||!!s&&(s.inventoryLedger.some(e=>e.referenceId===t.id)||s.erpOutbox.some(e=>e.entityId===t.id)||s.events.some(e=>e.entityId===t.id&&/^trip\.(start|qr|tare|gross|loading|depart|arrive|receive|return)/.test(e.type)));
@@ -103,8 +104,11 @@ export function scheduleAutomaticDispatch(s,options,actor){
   if(evidence(task,s)||task.truckId||task.assignedDriverUserId||!valid(task.tonnageT)||!valid(task.volumeM3)||!valid(task.densityTPerM3))fail('Muatan menunggu mengandung assignment atau bukti eksekusi yang tidak konsisten.');
   const dispatch=s.dispatches.find(d=>d.id===task.dispatchId&&d.requestId===task.requestId&&d.source===SOURCE);
   if(!dispatch||!dispatch.tripIds.includes(task.id))fail('Muatan menunggu tidak terhubung pada dispatch kanonis.');
-  const claims=validateClaims(s),activeDrivers=drivers(options);
-  const freeDrivers=activeDrivers.filter(d=>!claims.driverClaims.has(d.id));
+  const claims=validateClaims(s),policy=dispatch.allocationPolicy,limited=dispatch.workflow==='QUARRY_CILEGON'&&policy!==undefined;
+  if(limited&&(!policy||policy.mode!==FLEET_POLICY_MODE||policy.version!==1||!Number.isSafeInteger(policy.totalActiveFleet)||policy.totalActiveFleet<0||policy.baseQuota!==Math.max(5,Math.ceil(policy.totalActiveFleet*0.05))||policy.maxTruckCount!==policy.baseQuota||typeof policy.simulatedDrivers!=='boolean'||policy.driverMode!==(policy.simulatedDrivers?'REAL_THEN_SIMULATED':'REAL_ONLY')))fail('Kebijakan alokasi armada dispatch tidak valid; rekonsiliasi operator diperlukan.');
+  const allowVirtual=limited&&policy.simulatedDrivers===true&&fleetSimulationEnabled(s);
+  const activeDrivers=drivers(s,options).filter(d=>!isSimulatedFleetDriver(d)||allowVirtual);
+  const freeDrivers=activeDrivers.filter(d=>!isSimulatedFleetDriver(d)&&!claims.driverClaims.has(d.id));
   const freeTrucks=s.trucks.filter(v=>v.active&&!claims.truckClaims.has(v.id)&&valid(v.bedM3)&&valid(v.payloadLimitT));
   const pairs=[];
   for(const [truckId,claim]of claims.truckClaims){
@@ -113,8 +117,12 @@ export function scheduleAutomaticDispatch(s,options,actor){
   }
   // Only AVAILABLE units enter a new dispatch. Once bound, the same pair may
   // receive additional queue entries exclusively within that dispatch.
+  const claimedCount=[...claims.truckClaims.values()].filter(claim=>claim.key===task.dispatchId).length;
+  let slots=limited?Math.max(0,policy.maxTruckCount-claimedCount):Infinity;
   for(const truck of freeTrucks.sort((a,b)=>Math.min(b.payloadLimitT,b.bedM3*task.densityTPerM3)-Math.min(a.payloadLimitT,a.bedM3*task.densityTPerM3)||a.code.localeCompare(b.code))){
-   const driver=freeDrivers.shift();if(!driver)break;pairs.push({truck,driver,load:0});
+   if(slots<=0)break;
+   const driver=freeDrivers.shift()||activeDrivers.find(d=>isSimulatedFleetDriver(d)&&d.truckId===truck.id&&!claims.driverClaims.has(d.id));
+   if(!driver)continue;pairs.push({truck,driver,load:0});slots--;
   }
   if(!pairs.length){blocked.add(task.id);continue;}
   const source=s.stockpiles.find(x=>x.id===task.stockpileId),product=s.products.find(x=>x.id===task.skuId),crusher=s.crushers.find(x=>x.id===task.crusherId);
@@ -132,11 +140,11 @@ export function scheduleAutomaticDispatch(s,options,actor){
    s.trips.push(pending);dispatch.tripIds.push(pending.id);
   }
   const selectedDriver=pair.driver,at=now();
-  Object.assign(task,{tonnageT,volumeM3,truckId:truck.id,assignedDriverUserId:selectedDriver.id,assignedDriverName:selectedDriver.displayName||selectedDriver.name||selectedDriver.username||selectedDriver.id,status:'queued',assignmentMode:'AUTOMATIC_SERIAL',assignedAt:at,assignmentHold:null,estimatedStartAt:new Date(Date.now()+pair.load*60000).toISOString(),estimatedReturnAt:new Date(Date.now()+(pair.load+truck.cycleMinutes)*60000).toISOString()});
+  Object.assign(task,{tonnageT,volumeM3,truckId:truck.id,assignedDriverUserId:selectedDriver.id,assignedDriverName:selectedDriver.displayName||selectedDriver.name||selectedDriver.username||selectedDriver.id,status:'queued',assignmentMode:'AUTOMATIC_SERIAL',assignedAt:at,assignmentHold:null,estimatedStartAt:new Date(Date.now()+pair.load*60000).toISOString(),estimatedReturnAt:new Date(Date.now()+(pair.load+truck.cycleMinutes)*60000).toISOString(),...(limited?{assignedDriverSynthetic:isSimulatedFleetDriver(selectedDriver),assignedDriverMode:isSimulatedFleetDriver(selectedDriver)?'SIMULATED_NO_LOGIN':'REAL_ACCOUNT'}:{})});
   audit(s,actor,'trip.automatically_assigned',task,{truckId:truck.id,assignedDriverUserId:selectedDriver.id});assigned.push(task.id);
  }
  const busyDrivers=new Set(s.trips.filter(t=>open(t)&&t.truckId).map(t=>t.assignedDriverUserId).filter(Boolean));
- const hasDriver=drivers(options).some(d=>!busyDrivers.has(d.id));
+ const hasDriver=drivers(s,options).some(d=>!isSimulatedFleetDriver(d)&&!busyDrivers.has(d.id));
  for(const task of waiting(s))if(!['SOURCE_INACTIVE','TRUCK_CAPACITY','TRIP_LIMIT_REACHED'].includes(task.assignmentHold))task.assignmentHold=hasDriver?'NO_AVAILABLE_TRUCK':'NO_AVAILABLE_DRIVER';
  refreshAutomaticDispatchProgress(s);
  return {assignedTripIds:assigned,autoAssignedTripIds:assigned,waitingTripIds:waiting(s).map(t=>t.id),autoDispatch:automaticDispatchSummary(s)};

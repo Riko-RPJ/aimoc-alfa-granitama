@@ -7,6 +7,7 @@ import {ensureStockpileLocations, stockpileLocationsForRead, applyStockpileLocat
 import {scheduleAutomaticDispatch,automaticDispatchSummary,truckAvailability,assertSerialDispatchClaims,refreshAutomaticDispatchProgress as aggregate} from './automatic-dispatch.mjs';
 import {QUARRY_CILEGON_WORKFLOW,isQuarryCilegon,quarryCilegonConfig,applyQuarryCilegonAction,quarryTripProjection,quarryErpFields} from './quarry-cilegon-domain.mjs';
 import {quarrySourceBudgets} from './quarry-source-budgets.mjs';
+import {effectiveFleetDrivers,isSimulatedFleetDriver,fleetSimulationEnabled,fleetDispatchPolicy,fleetPolicyProjection,applyFleetSimulationConfigure} from './fleet-simulation.mjs';
 export {allocateAutomaticDispatch,upgradeToAutomaticDispatch} from './automatic-dispatch.mjs';
 
 // This is an explicitly synthetic workflow over the existing operation document.
@@ -122,7 +123,7 @@ function planRequest(s, p, actor, options) {
   if (vessel && (vessel.active === false || vessel.status === 'closed' || vessel.jettyId !== request.jettyId || row(s, 'jetties', request.jettyId).active === false)) fail('Tujuan kapal/jetty tidak tersedia.', 'INACTIVE_DESTINATION', 409);
   if (vessel && requestedT > vessel.payloadLimitT - vessel.loadedT - vessel.reservedT + EPS) fail('Sisa kapasitas kapal termasuk reservasi tidak cukup.', 'VESSEL_CAPACITY', 409);
   const dispatch = {id: id('dsp'), code: nextCode('DSP', s.dispatches), requestId: request.id, transferMode: request.transferMode, source: SOURCE, synthetic: true, ...locationFields(request), destinationId: request.destinationId || null, jettyId: request.jettyId, vesselId: request.vesselId, allocations: [], tripIds: [], status: 'planned', createdAt: timestamp(), completedTrips: 0, deliveredM3: 0, deliveredT: 0};
-  if(isQuarryCilegon(request))dispatch.workflow=QUARRY_CILEGON_WORKFLOW;
+  if(isQuarryCilegon(request)){dispatch.workflow=QUARRY_CILEGON_WORKFLOW;dispatch.allocationPolicy=fleetDispatchPolicy(s);}
   let sequence = s.trips.reduce((max, t) => Math.max(max, t.sequence || 0), 0);
   let estimatedTrips=0;
   for (const line of request.lines) {
@@ -133,7 +134,8 @@ function planRequest(s, p, actor, options) {
     const sourceCapacities=trucks.filter(truck=>Number.isFinite(truck.bedM3)&&truck.bedM3>0&&Number.isFinite(truck.payloadLimitT)&&truck.payloadLimitT>0).map(truck=>Math.min(truck.payloadLimitT,truck.bedM3*line.densityTPerM3));
     // Source fan-out is useful only for parallel pairs and more than one load.
     // A busy eligible pair still counts: waiting work keeps its source plan.
-    const balanceSources=isQuarryCilegon(request)&&sourceCapacities.length>=2&&new Set(driverCatalog(options.drivers).map(driver=>driver.id)).size>=2&&line.tonnageT>Math.max(...sourceCapacities)+EPS&&new Set(stocks.filter(stock=>stock.onHandM3>stock.reservedM3).map(stock=>stock.crusherId)).size>=2;
+    const eligibleDrivers=driverCatalog(options.drivers).filter(driver=>!isSimulatedFleetDriver(driver)||dispatch.allocationPolicy?.simulatedDrivers===true&&fleetSimulationEnabled(s));
+    const balanceSources=isQuarryCilegon(request)&&sourceCapacities.length>=2&&new Set(eligibleDrivers.map(driver=>driver.id)).size>=2&&line.tonnageT>Math.max(...sourceCapacities)+EPS&&new Set(stocks.filter(stock=>stock.onHandM3>stock.reservedM3).map(stock=>stock.crusherId)).size>=2;
     const sourceBudgets=balanceSources?quarrySourceBudgets(stocks,line):null;
     if(balanceSources)dispatch.sourceAllocationMode='BALANCED_CRUSHERS';
     let remainingT = line.tonnageT;
@@ -307,10 +309,12 @@ export function applyIntegratedAction(state, action, payload, actor, options = {
   if (!actor?.id || !['admin', 'stock', 'jetty', 'driver'].includes(actor.role)) fail('Akun tidak berwenang.', 'FORBIDDEN', 403);
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) fail('Payload wajib berupa object.');
   const draft = structuredClone(state);
+  options={...options,drivers:effectiveFleetDrivers(draft,options.drivers)};
   for (const key of ['products', 'crushers', 'stockpiles', 'trucks', 'jetties', 'vessels', 'requests', 'dispatches', 'trips', 'inventoryLedger', 'events', 'erpOutbox']) if (!Array.isArray(draft[key])) fail('Dokumen operasional tidak lengkap.', 'STATE_INVALID', 409);
   ensureStockpileLocations(draft);
   let result;
-  if (typeof action==='string'&&action.startsWith('quarry.')) result=applyQuarryCilegonAction(draft,action,payload,actor,options,{createRequest:p=>createRequest(draft,p,actor),planRequest:p=>planRequest(draft,p,actor,options),moveTrip:(a,p,o)=>moveTrip(draft,a,p,actor,o)});
+  if(action==='fleet.simulation.configure')result=applyFleetSimulationConfigure(draft,payload,actor);
+  else if (typeof action==='string'&&action.startsWith('quarry.')) result=applyQuarryCilegonAction(draft,action,payload,actor,options,{createRequest:p=>createRequest(draft,p,actor),planRequest:p=>planRequest(draft,p,actor,options),moveTrip:(a,p,o)=>moveTrip(draft,a,p,actor,o)});
   else if (['master.stockpileLocation.save', 'master.stockpileLocation.delete'].includes(action)) result = applyStockpileLocationAction(draft, action, payload, actor);
   else if (action === 'request.create') result = createRequest(draft, payload, actor);
   else if (action === 'request.plan') result = planRequest(draft, payload, actor, options);
@@ -326,6 +330,7 @@ export function applyIntegratedAction(state, action, payload, actor, options = {
 /** Role-scoped data; occupancy is computed BEFORE scope filtering. */
 export function integratedView(state, actor, options = {}) {
   if (!actor?.id || !['admin', 'stock', 'jetty', 'driver'].includes(actor.role)) fail('Akun tidak berwenang.', 'FORBIDDEN', 403);
+  options={...options,drivers:effectiveFleetDrivers(state,options.drivers)};
   const view = structuredClone(state);
   delete view.driverDailySummary;
   view.stockpileLocations = stockpileLocationsForRead(state);
@@ -429,7 +434,8 @@ export function integratedView(state, actor, options = {}) {
   }
   view.trucks = fleet;
   view.fleet = fleet;
-  view.drivers = driverCatalog(options.drivers).filter(d => actor.role === 'admin' || d.id === actor.id).map(d => ({id: d.id, name: d.name || d.displayName || d.username || d.id, username: d.username, role: 'driver', active: true}));
+  view.drivers = driverCatalog(options.drivers).filter(d => !isSimulatedFleetDriver(d)&&(actor.role === 'admin' || d.id === actor.id)).map(d => ({id: d.id, name: d.name || d.displayName || d.username || d.id, username: d.username, role: 'driver', active: true}));
+  view.fleetPolicy=fleetPolicyProjection(state,options.drivers,actor);
   view.integratedDemo = {source: SOURCE, synthetic: true, productionEvidence: false, netsuitePosting: 'awaiting_configuration', activeTrips: fleet.filter(t => t.status === 'busy').length,autoDispatch:automaticDispatchSummary(actor.role==='admin'?state:{...state,trips:view.trips})};
   view.quarryCilegon=quarryCilegonConfig(state);
   const sum = (rows, field) => round(rows.reduce((total, item) => total + (item[field] || 0), 0));
