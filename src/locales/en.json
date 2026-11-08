@@ -670,5 +670,9 @@
   "QR atau penugasan telah berubah. Muat ulang QR ritase.": "The QR or assignment changed. Reload the trip QR.",
   "ID event scan telah digunakan dengan isi berbeda.": "This scan event ID was already used with different contents.",
   "Nomor penerimaan memerlukan pemeriksaan Admin.": "The receipt number requires Admin review.",
-  "Ritase ini menggunakan dua scan Driver. Lanjutkan melalui konfirmasi scan Driver.": "This trip uses two Driver scans. Continue through the Driver scan confirmation."
+  "Ritase ini menggunakan dua scan Driver. Lanjutkan melalui konfirmasi scan Driver.": "This trip uses two Driver scans. Continue through the Driver scan confirmation.",
+  "SKU dipilih dari master Admin": "Selected SKU from Admin master data",
+  "SKU stockpile": "Stockpile SKU",
+  "Pilihan Anda": "Your selection",
+  "Pilih stockpile yang sesuai dengan SKU tersebut sebelum menyimpan.": "Choose a stockpile matching this SKU before saving."
 }
