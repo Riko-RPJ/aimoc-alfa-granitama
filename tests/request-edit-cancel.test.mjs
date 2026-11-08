@@ -22,6 +22,14 @@ function fixture(){
 }
 const rejectsAtomic=(f,run,code)=>{const before=structuredClone(f.state);assert.throws(run,error=>error.code===code);assert.deepEqual(f.state,before);};
 
+test('create defaults only omitted transport mode to MARINE and rejects explicitly invalid modes without mutation',()=>{
+ const f=fixture();
+ for(const transferMode of [null,'',false,0])rejectsAtomic(f,()=>f.act('request.create',definition({transferMode})),'TRANSFER_MODE_INVALID');
+ const omitted=definition();delete omitted.transferMode;
+ const requestId=f.act('request.create',omitted).requestId;
+ assert.equal(f.state.requests.find(row=>row.id===requestId).transferMode,'MARINE');
+});
+
 test('edit recomputes authoritative units, keeps identity and metadata, audits once without stock, fleet, vessel or ERP movement',()=>{
  const f=fixture(),r=f.get();r.clientMetadata={reference:'retained'};r.customDemoSetting={pace:3};
  const identity=Object.fromEntries(['id','code','createdAt','requestedBy','source','synthetic'].map(key=>[key,r[key]])),before=physical(f.state);

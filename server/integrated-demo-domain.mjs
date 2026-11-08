@@ -68,7 +68,7 @@ function destination(s, request, skuId, requestedStockpileId) {
 
 /** One authoritative definition validator for create and pre-dispatch edit. */
 function requestDefinition(s,p,actor){
-  const transferMode=p.transferMode||'MARINE';
+  const transferMode=p.transferMode===undefined?'MARINE':p.transferMode;
   if(!['LAND','MARINE'].includes(transferMode))fail('Mode harus LAND atau MARINE.','TRANSFER_MODE_INVALID');
   if(transferMode==='LAND'){admin(actor);ensureReceivingStockpilesForRequest(s,p);}
   const resolved=resolveStockpileDestination(s,{...p,transferMode});
