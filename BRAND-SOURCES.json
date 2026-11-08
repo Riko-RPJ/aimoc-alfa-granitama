@@ -1,7 +1,7 @@
 {
-  "checkedAt": "2026-11-05",
+  "checkedAt": "2026-11-09",
   "purpose": "Branding for the authorized AIMOC Gandasari Alfa Granitama operational prototype",
-  "brandPolicy": "Only original AIMOC, Gandasari Group and PT Alfa Granitama marks; no Decom logo. Assets downloaded unchanged; all marks retain their respective owners.",
+  "brandPolicy": "Only original AIMOC, Gandasari Group, PT Alfa Granitama and Prasetia Dwi Dharma marks. Assets preserved unchanged; all marks retain their respective owners.",
   "verification": "Public official company homepage fetched successfully over HTTPS using Invoke-WebRequest. The search/browser renderer could not render gandasarigroup.com. Navigation/footer and subsidiary context were inspected in source and image contents were visually checked.",
   "alfaStandaloneDomain": "www.alfagranitama.com currently renders a domain parking page in web search; this app therefore uses the group official subsidiary-logo asset, not a fabricated logo.",
   "photosAreLive": false,
@@ -71,6 +71,15 @@
       "sha256": "4bedf51d2cab822060ac09cd389b3a46c52bd9b107f2ded70f9584d104f082c4",
       "localUrl": "/brand/gandasari-mining.jpg",
       "brand": "Gandasari Group"
+    },
+    {
+      "type": "logo",
+      "file": "prasetia-dwidharma-logo.png",
+      "brand": "Prasetia Dwi Dharma",
+      "provenance": "Exact ppt/media/image38.png extracted from the user-provided Initial Proposal presentation by Prasetia v.3(Final). Original artwork visually verified; no Decom mark.",
+      "bytes": 30051,
+      "sha256": "de42edb2202cafb353a87f2edc25684636cba469bd06462c679a0d4755f03942",
+      "localUrl": "/brand/prasetia-dwidharma-logo.png"
     }
   ]
 }

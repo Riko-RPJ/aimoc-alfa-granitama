@@ -58,3 +58,6 @@
 .truck-code-task-actions button{background:#087b7d;border:0;color:white;border-radius:9px;padding:12px 22px;font-weight:750;cursor:pointer;display:inline-flex;align-items:center;gap:8px}
 .truck-code-task-actions button:disabled{opacity:.5;cursor:not-allowed}
 .truck-code-task-actions p{font-size:12px;color:#6a7980;margin:0}
+
+/* Original partner marks share one strip at every workspace breakpoint. */
+.partners{max-width:370px;gap:14px}.partners .partner-mark{display:flex;align-items:center;justify-content:center;width:29%;min-width:0;flex:1}.partners .partner-mark img{display:block;object-fit:contain;width:100%;height:44px;max-width:110px}.partners .partner-mark:last-child img{max-width:95px}.partners .partner-mark b{font-size:9px;text-align:center;line-height:1.4}.qc-sidebar-bottom .partners{gap:9px}.qc-sidebar-bottom .partners .partner-mark img{height:27px;max-width:72px;filter:none;opacity:1}.qc-sidebar-bottom .partners{background:#fff;border-radius:5px;padding:7px 9px;box-sizing:border-box}.qc-sidebar-bottom .partners>span{background:#dce6e8}.qc-sidebar-bottom .partners .partner-mark b{color:#193a44}@media(max-width:600px){.partners{gap:11px;max-width:330px}.partners .partner-mark img{height:39px;max-width:95px}.partners .partner-mark:last-child img{max-width:85px}}
