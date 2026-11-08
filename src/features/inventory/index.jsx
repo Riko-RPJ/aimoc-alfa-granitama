@@ -58,14 +58,21 @@ export function MeasurementModal({
     [saving, setSaving] = useState(false),
     [uploaded, setUploaded] = useState(null),
     [error, setError] = useState('');
+  const sourceGeneration = useRef(0);
   const stream = useRef(null),
     video = useRef(null),
     file = useRef(null);
   const selected = lookup(scopeStock, stockpileId),
     sourceProduct = lookup(products, selected?.skuId),
     p = lookup(products, confirmedSku) || sourceProduct,
-    skuMismatch = Boolean(confirmedSku && confirmedSku !== selected?.skuId),
     c = lookup(crushers, selected?.crusherId);
+  const matchingStockpiles = skuId => {
+    const product = lookup(products, skuId);
+    if (!selected || !c || c.active === false || !product || product.active === false) return [];
+    return scopeStock.filter(stock => stock.active !== false && stock.crusherId === selected.crusherId && stock.skuId === skuId);
+  };
+  const skuCandidates = confirmedSku ? matchingStockpiles(confirmedSku) : [];
+  const skuMismatch = Boolean(confirmedSku && !skuCandidates.some(stock => stock.id === stockpileId));
   const estimated = number(geometry.lengthM) * number(geometry.widthM) * number(geometry.heightM) * number(geometry.shapeFactor);
   const densityValid = typeof p?.densityTPerM3 === 'number' && Number.isFinite(p.densityTPerM3) && p.densityTPerM3 > 0 && p.densityTPerM3 <= 5;
   const manualPreview = quantityValue === '' ? null : previewMeasurementQuantity(Number(quantityValue), quantityUnit, p?.densityTPerM3);
@@ -74,7 +81,26 @@ export function MeasurementModal({
     stream.current = null;
     setCamera(false);
   };
+  const changeSource = (nextId, nextSku = '') => {
+    if (nextId !== stockpileId) {
+      sourceGeneration.current++;
+      stopCamera();
+      setPhoto(null); setPhotoName(''); setUploaded(null);
+      if (file.current) file.current.value = '';
+      setQuantity('');
+      setGeometry({lengthM:'', widthM:'', heightM:'', shapeFactor:'0.5'});
+      setNotes(''); setCameraError('');
+    }
+    setStockpile(nextId); setConfirmedSku(nextSku); setError('');
+  };
+  const chooseSku = skuId => {
+    const candidates = matchingStockpiles(skuId);
+    const next = candidates.find(stock => stock.id === stockpileId) || (candidates.length === 1 ? candidates[0] : null);
+    if (next) changeSource(next.id, skuId);
+    else { setConfirmedSku(skuId); setError(''); }
+  };
   useEffect(() => () => {
+    sourceGeneration.current++;
     stream.current?.getTracks().forEach(t => t.stop());
   }, []);
   useEffect(() => {
@@ -84,10 +110,11 @@ export function MeasurementModal({
     }
   }, [camera]);
   const openCamera = async () => {
+    const generation = sourceGeneration.current;
     setCameraError('');
     try {
       if (!navigator.mediaDevices?.getUserMedia) throw new Error('Kamera browser memerlukan HTTPS dan perangkat yang mendukung.');
-      stream.current = await navigator.mediaDevices.getUserMedia({
+      const openedStream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: {
             ideal: 'environment'
@@ -101,8 +128,11 @@ export function MeasurementModal({
         },
         audio: false
       });
+      if (sourceGeneration.current !== generation) { openedStream.getTracks().forEach(t => t.stop()); return; }
+      stream.current = openedStream;
       setCamera(true);
     } catch (e) {
+      if (sourceGeneration.current !== generation) return;
       setCameraError(e.name === 'NotAllowedError' ? 'Izin kamera belum diberikan. Izinkan kamera di browser atau unggah foto.' : e.message);
     }
   };
@@ -131,8 +161,10 @@ export function MeasurementModal({
       setError('Ukuran foto maksimal 2 MB.');
       return;
     }
+    const generation = sourceGeneration.current;
     let r = new FileReader();
     r.onload = () => {
+      if (sourceGeneration.current !== generation) return;
       setPhoto(String(r.result));
       setPhotoName(f.name);
       setUploaded(null);
@@ -142,7 +174,7 @@ export function MeasurementModal({
   const submit = async e => {
     e.preventDefault();
     setError('');
-    if (confirmedSku !== selected?.skuId) {
+    if (!confirmedSku || skuMismatch) {
       setError('SKU yang dikonfirmasi harus sesuai dengan stockpile dan ukuran material.');
       return;
     }
@@ -195,12 +227,7 @@ export function MeasurementModal({
   return <Modal wide title={tr("Pengukuran & kamera stockpile")} subtitle={tr("Pilih lokasi dan SKU. Bukti kamera dan hasil ukur selalu memiliki sumber yang jelas.")} onClose={() => {
     stopCamera();
     onClose();
-  }}><form onSubmit={submit}><div className="measurement-layout"><div className="camera-column"><div className={`camera-preview ${photo || camera ? 'has-image' : ''}`}>{camera ? <video ref={video} playsInline muted autoPlay /> : photo ? <img src={photo} alt={tr("Foto stockpile yang dipilih operator")} /> : <><Camera size={39} /><strong>{tr("Foto stockpile")}</strong><p>{tr("Ambil bukti kondisi stockpile")}<br />{tr("dengan kamera perangkat Anda.")}</p></>}<span className="camera-chip"><span />{camera ? tr("Kamera perangkat aktif") : photo ? tr("Foto dari operator") : tr("Belum ada kamera terhubung")}</span></div><div className="camera-actions">{camera ? <><Button icon={Camera} onClick={takePhoto}>{tr("Ambil foto")}</Button><Button variant="secondary" onClick={stopCamera}>{tr("Matikan")}</Button></> : <><Button variant="secondary" icon={Camera} disabled={!canUploadEvidence} onClick={openCamera}>{tr("Buka kamera")}</Button><Button variant="secondary" icon={Upload} disabled={!canUploadEvidence} onClick={() => file.current?.click()}>{tr("Unggah foto")}</Button></>}<input ref={file} type="file" accept="image/jpeg,image/png" capture="environment" hidden disabled={!canUploadEvidence} onChange={selectPhoto} /></div>{!canUploadEvidence && <p className="measurement-camera-role-note">{tr("Bukti kamera diunggah oleh operator stockpile. Admin dapat mencatat hasil survei tanpa foto.")}</p>}{photoName && <p className="photo-name"><CheckCircle2 size={14} />{photoName}</p>}{cameraError && <p className="form-error" role="alert">{tr(cameraError)}</p>}<div className="camera-disclaimer"><ShieldCheck size={17} /><p><b>{tr("Pengukuran kamera 3D belum terhubung.")}</b>{tr(" Foto atau video tanpa skala / data kedalaman tidak cukup untuk mengukur m³. Rekonstruksi fotogrametri atau LiDAR memerlukan integrasi dan kalibrasi lapangan.")}</p></div></div><div className="measurement-form"><Field label={tr("Stockpile / sumber crusher")}><select data-testid="measurement-stockpile" required value={stockpileId} onChange={e => {
-              setStockpile(e.target.value);
-              setConfirmedSku('');
-              setQuantity('');
-              setError('');
-            }}>{scopeStock.map(s => <option key={s.id} value={s.id}>{s.code} · {lookup(crushers, s.crusherId)?.name} · {lookup(products, s.skuId)?.code}</option>)}</select></Field><Field label={tr("Konfirmasi SKU material yang diukur")}><select data-testid="measurement-sku" required value={confirmedSku} onChange={e => {setConfirmedSku(e.target.value);setError('');}}><option value="">{tr("Pilih SKU sesuai ukuran batu…")}</option>{products.filter(x => x.active !== false).map(x => <option key={x.id} value={x.id}>{x.code} · {x.name} ({x.sizeMm})</option>)}</select></Field><div className="sku-context" data-testid="measurement-sku-context" aria-live="polite"><span className="sku-context-icon"><Package size={22} /></span><div><small>{confirmedSku ? tr("SKU dipilih dari master Admin") : tr("SKU sesuai master Admin")}</small><b>{p?.code} · {p?.name}</b><small>{tr("Ukuran ")}{p?.sizeMm}{tr(" · berat jenis ")}{fmt(p?.densityTPerM3, 2)}{tr(" t/m³")}</small></div></div>{skuMismatch && <p className="measurement-unit-warning" role="alert" data-testid="measurement-sku-mismatch"><b>{tr("SKU stockpile")}: {sourceProduct?.code} · {selected?.code}.</b> {tr("Pilihan Anda")}: {p?.code}. {tr("Pilih stockpile yang sesuai dengan SKU tersebut sebelum menyimpan.")}</p>}<Field label={tr("Metode pencatatan")}><select value={method} onChange={e => {setMethod(e.target.value);setError('');}}><option value="camera_pending" disabled={!canUploadEvidence}>{tr("Bukti kamera — menunggu pengukuran")}</option><option value="manual">{tr("Hasil survei lapangan")}</option><option value="calibrated_geometry">{tr("Estimasi geometri terkalibrasi")}</option></select></Field>
+  }}><form onSubmit={submit}><div className="measurement-layout"><div className="camera-column"><div className={`camera-preview ${photo || camera ? 'has-image' : ''}`}>{camera ? <video ref={video} playsInline muted autoPlay /> : photo ? <img src={photo} alt={tr("Foto stockpile yang dipilih operator")} /> : <><Camera size={39} /><strong>{tr("Foto stockpile")}</strong><p>{tr("Ambil bukti kondisi stockpile")}<br />{tr("dengan kamera perangkat Anda.")}</p></>}<span className="camera-chip"><span />{camera ? tr("Kamera perangkat aktif") : photo ? tr("Foto dari operator") : tr("Belum ada kamera terhubung")}</span></div><div className="camera-actions">{camera ? <><Button icon={Camera} onClick={takePhoto}>{tr("Ambil foto")}</Button><Button variant="secondary" onClick={stopCamera}>{tr("Matikan")}</Button></> : <><Button variant="secondary" icon={Camera} disabled={!canUploadEvidence} onClick={openCamera}>{tr("Buka kamera")}</Button><Button variant="secondary" icon={Upload} disabled={!canUploadEvidence} onClick={() => file.current?.click()}>{tr("Unggah foto")}</Button></>}<input ref={file} type="file" accept="image/jpeg,image/png" capture="environment" hidden disabled={!canUploadEvidence} onChange={selectPhoto} /></div>{!canUploadEvidence && <p className="measurement-camera-role-note">{tr("Bukti kamera diunggah oleh operator stockpile. Admin dapat mencatat hasil survei tanpa foto.")}</p>}{photoName && <p className="photo-name"><CheckCircle2 size={14} />{photoName}</p>}{cameraError && <p className="form-error" role="alert">{tr(cameraError)}</p>}<div className="camera-disclaimer"><ShieldCheck size={17} /><p><b>{tr("Pengukuran kamera 3D belum terhubung.")}</b>{tr(" Foto atau video tanpa skala / data kedalaman tidak cukup untuk mengukur m³. Rekonstruksi fotogrametri atau LiDAR memerlukan integrasi dan kalibrasi lapangan.")}</p></div></div><div className="measurement-form"><Field label={tr("Stockpile / sumber crusher")}><select data-testid="measurement-stockpile" disabled={busy || saving} required value={stockpileId} onChange={e => { const next = lookup(scopeStock, e.target.value); changeSource(e.target.value, next?.skuId === confirmedSku ? confirmedSku : ''); }}>{scopeStock.map(s => <option key={s.id} value={s.id}>{s.code} · {lookup(crushers, s.crusherId)?.name} · {lookup(products, s.skuId)?.code}</option>)}</select></Field><Field label={tr("Konfirmasi SKU material yang diukur")}><select data-testid="measurement-sku" disabled={busy || saving} required value={confirmedSku} onChange={e => chooseSku(e.target.value)}><option value="">{tr("Pilih SKU sesuai ukuran batu…")}</option>{products.filter(x => x.active !== false).map(x => <option key={x.id} value={x.id}>{x.code} · {x.name} ({x.sizeMm})</option>)}</select></Field><div className="sku-context" data-testid="measurement-sku-context" aria-live="polite"><span className="sku-context-icon"><Package size={22} /></span><div><small>{confirmedSku ? tr("SKU dipilih dari master Admin") : tr("SKU sesuai master Admin")}</small><b>{p?.code} · {p?.name}</b><small>{tr("Ukuran ")}{p?.sizeMm}{tr(" · berat jenis ")}{fmt(p?.densityTPerM3, 2)}{tr(" t/m³")}</small></div></div><p className="measurement-camera-role-note" data-testid="measurement-auto-source-note">{tr("Stockpile otomatis mengikuti SKU pada crusher yang sama. Hasil ukur dan bukti perlu diisi ulang jika sumber berubah.")}</p>{skuMismatch && <p className="measurement-unit-warning" role="alert" data-testid="measurement-sku-mismatch"><b>{skuCandidates.length === 0 ? tr("Belum ada stockpile aktif untuk SKU ini pada crusher yang sama. Hubungi Admin.") : skuCandidates.length > 1 ? tr("Ada beberapa stockpile untuk SKU ini pada crusher yang sama. Pilih sumber yang akan diukur.") : tr("Pilih stockpile yang sesuai dengan SKU tersebut sebelum menyimpan.")}</b><br />{tr("SKU stockpile")}: {sourceProduct?.code} · {selected?.code}. {tr("Pilihan Anda")}: {p?.code}. {tr("Pilih stockpile yang sesuai dengan SKU tersebut sebelum menyimpan.")}</p>}<Field label={tr("Metode pencatatan")}><select value={method} onChange={e => {setMethod(e.target.value);setError('');}}><option value="camera_pending" disabled={!canUploadEvidence}>{tr("Bukti kamera — menunggu pengukuran")}</option><option value="manual">{tr("Hasil survei lapangan")}</option><option value="calibrated_geometry">{tr("Estimasi geometri terkalibrasi")}</option></select></Field>
       {method === 'manual' && <div className="measurement-manual-entry">
         <div className="form-grid two"><Field label={tr("Satuan hasil survei")} hint={tr("Nilai dikosongkan saat satuan diganti agar tidak tertukar.")}><select data-testid="measurement-input-unit" value={quantityUnit} onChange={e => {setQuantityUnit(e.target.value);setQuantity('');setError('');}}><option value="m3">{tr("Volume (m³)")}</option><option value="t" disabled={!densityValid}>{tr("Tonase (ton)")}</option></select></Field>
         <Field label={tr(quantityUnit === 't' ? "Tonase hasil survei (ton)" : "Volume hasil survei (m³)")} hint={tr("Isi hasil ukur lapangan yang dapat ditelusuri, bukan perkiraan dari foto tunggal.")}><input data-testid="measurement-input-value" required type="number" min="0" max="1000000000" step="0.000001" value={quantityValue} onChange={e => {setQuantity(e.target.value);setError('');}} placeholder={tr("0,00")} /></Field></div>

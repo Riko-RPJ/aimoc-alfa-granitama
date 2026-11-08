@@ -674,5 +674,8 @@
   "SKU dipilih dari master Admin": "Selected SKU from Admin master data",
   "SKU stockpile": "Stockpile SKU",
   "Pilihan Anda": "Your selection",
-  "Pilih stockpile yang sesuai dengan SKU tersebut sebelum menyimpan.": "Choose a stockpile matching this SKU before saving."
+  "Pilih stockpile yang sesuai dengan SKU tersebut sebelum menyimpan.": "Choose a stockpile matching this SKU before saving.",
+  "Stockpile otomatis mengikuti SKU pada crusher yang sama. Hasil ukur dan bukti perlu diisi ulang jika sumber berubah.": "Stockpile selection follows the SKU on the same crusher. Enter new measurements and evidence when the source changes.",
+  "Belum ada stockpile aktif untuk SKU ini pada crusher yang sama. Hubungi Admin.": "No active stockpile for this SKU is available on the same crusher. Contact Admin.",
+  "Ada beberapa stockpile untuk SKU ini pada crusher yang sama. Pilih sumber yang akan diukur.": "Several stockpiles match this SKU on the same crusher. Choose the source to measure."
 }
