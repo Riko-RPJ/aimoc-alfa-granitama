@@ -4,6 +4,7 @@ import {requestDetail} from './request-detail.mjs';
 import {driverAssignmentQr} from './driver-assignment-qr.mjs';
 import {summarizeSkuStocks} from './sku-stock-summary.mjs';
 import {guardLocationOperatorReferences} from './location-guards.mjs';
+import {applyQuarryRequestDemo} from './quarry-request-demo.mjs';
 
 const fail=(status,code,message)=>{throw Object.assign(new Error(message),{status,code});};
 const validId=x=>typeof x==='string'&&/^[\w-]{1,100}$/.test(x);
@@ -113,8 +114,8 @@ export async function handleIntegratedDemo({db,path,method,req,actor,send,parseB
       fail(409,'REVISION_CONFLICT','Data telah diperbarui operator lain. Muat ulang lalu coba lagi.');
     const state=structuredClone(row.document),drivers=await driversFor(c);
     await guardLocationOperatorReferences(c,state,body.action,payload);
-    const result=applyIntegratedAction(state,body.action,payload,actor,{drivers});
-    if(['trip.driver_scan','quarry.gate.scan'].includes(body.action)&&result.replayed===true){
+    const result=body.action==='quarry.demo'?applyQuarryRequestDemo(state,payload,actor,{drivers}):applyIntegratedAction(state,body.action,payload,actor,{drivers});
+    if(['trip.driver_scan','quarry.gate.scan','quarry.demo'].includes(body.action)&&result.replayed===true){
       await c.query('INSERT INTO aimoc_alfa_ops.actions(actor_id,request_id,payload_hash,result) VALUES($1,$2,$3,$4::jsonb)',[actor.id,body.requestId,payloadHash,JSON.stringify(result)]);
       return {...await context(c,actor),result,replayed:true};
     }
