@@ -4,6 +4,12 @@ export const number=value=>typeof value==='number'&&Number.isFinite(value)?value
 export const isQuarry=value=>value?.workflow===QUARRY_WORKFLOW||value?.quarryWorkflow===QUARRY_WORKFLOW;
 export const finished=value=>['returned','cancelled'].includes(value?.status);
 export const models=[{id:'WIM_WIM',label:'WIM + WIM',modes:['WIM','WIM']},{id:'STATIC_WIM',label:'Static + WIM',modes:['STATIC','WIM']},{id:'STATIC_STATIC',label:'Static + Static',modes:['STATIC','STATIC']}];
+export function quarryEngineeringUrl(model,language='id'){
+ const params=new URLSearchParams();
+ if(models.some(item=>item.id===model))params.set('model',model);
+ params.set('lang',language==='en'?'en':'id');
+ return '/quarry-engineering.html?'+params.toString();
+}
 export function assignmentValue(trip){
  if(typeof trip?.quarry?.dispatchPass?.value==='string')return trip.quarry.dispatchPass.value;
  if(typeof trip?.qr?.value==='string')return trip.qr.value;
