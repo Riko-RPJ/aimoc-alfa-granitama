@@ -1,9 +1,9 @@
 import pg from 'pg';
 import {readFile} from 'node:fs/promises';
+import {databasePoolOptions} from './database-options.mjs';
 
-export function createDatabase(url=process.env.DATABASE_URL) {
-  if(!url) throw new Error('DATABASE_NOT_CONFIGURED');
-  const pool=new pg.Pool({connectionString:url,max:3,idleTimeoutMillis:10000,connectionTimeoutMillis:15000});
+export function createDatabase(url=process.env.DATABASE_URL,sslCa=process.env.DATABASE_SSL_CA) {
+  const pool=new pg.Pool(databasePoolOptions(url,sslCa));
   pool.on('error',()=>{});
   return {query:(...args)=>pool.query(...args),transaction:async fn=>{
     const c=await pool.connect();

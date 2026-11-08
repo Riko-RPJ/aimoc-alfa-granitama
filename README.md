@@ -81,6 +81,8 @@ The app uses its own PostgreSQL database `aimoc_alfa_granitama` on the existing 
 
 Passwords are scrypt hashes. Sessions use random database-backed tokens in HttpOnly/SameSite cookies (Secure on Vercel), 12-hour expiry, CSRF and origin checks. Login attempts are limited. Server credentials are never sent to the client. Evidence access follows its submitting user or visible measurement scope. UAT evidence storage is capped at 200 files/150 MB; records are not silently deleted.
 
+For a PostgreSQL server using a private certificate authority, optionally set server-only `DATABASE_SSL_CA` to the CA certificate PEM (or CA certificate bundle, with actual line breaks). Supply only public CA certificates. This requires a PostgreSQL TCP URL and enforces certificate-chain and hostname verification; conflicting SSL URL parameters are removed before `pg` parses the connection. Empty or invalid CA configuration fails closed. Omitting this variable preserves the existing `DATABASE_URL` options. Keep the variable out of `VITE_` build configuration; it does not expose a database endpoint or change the configured destination by itself.
+
 ## Oracle NetSuite
 
 Departure, receipt and approved survey generate traceable outbox intents marked `awaiting_configuration`. There is no posting to NetSuite, inventory transaction ACK or claim of completed ERP integration. Sandbox credentials, approved location/item/unit mappings, account/cost decisions and reconciliation UAT are still required. Internal stock transfers must not be mapped as customer Sales Orders without the ERP team's approval.
