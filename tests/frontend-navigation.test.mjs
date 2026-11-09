@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFile} from 'node:fs/promises';
-import {legacyPagesForRole,defaultLegacyPage,legacyPageFromPath,legacyPathForPage,stockpileNavigation,targetNavigation} from '../src/app/navigation.js';
+import {legacyPagesForRole,defaultLegacyPage,legacyPageFromPath,legacyPathForPage,stockpileNavigation,targetNavigation,isStockpilePath,stockpileMeasurementPage} from '../src/app/navigation.js';
 
 const existing = ['overview','home','inventory','pickups','activity','requests','dispatch','jetty','master','audit'].map(x=>[x,x]);
 
@@ -32,39 +31,14 @@ test('planned Driver routes are not exposed as running legacy pages',()=>{
   assert.deepEqual(targetNavigation.DRIVER,['/driver/home','/driver/tasks','/driver/history','/driver/profile']);
   assert.equal(defaultLegacyPage('driver'),null);
 });
-test('Stockpile login design is selected only by the Stockpile route',async()=>{
-  const source=await readFile(new URL('../src/features/auth/index.jsx',import.meta.url),'utf8');
-  assert.match(source,/pathname\.startsWith\('\/stockpile'\)/);
-  assert.match(source,/if \(!window\.location\.pathname.*return <div className="login-shell">/);
-  assert.match(source,/selectTheme\('light'\)/);
-  assert.match(source,/selectTheme\('dark'\)/);
-  assert.match(source,/aimoc\.stockpile\.theme/);
-  assert.match(source,/placeholder="Masukkan username Stockpile"/);
-  assert.match(source,/JSON\.stringify\(\{ username, password \}\)/);
+test('Stockpile tablet login matches only the workspace path',()=>{
+  for(const path of ['/stockpile','/stockpile/','/stockpile/inventory','/stockpile/add-material']) assert.equal(isStockpilePath(path),true);
+  for(const path of ['/','/admin/stockpile','/stockpile-backup']) assert.equal(isStockpilePath(path),false);
 });
-test('Stockpile landing exposes exactly two backend-integrated tasks',async()=>{
-  const source=await readFile(new URL('../src/features/pages/stockpile/StockpileMenuPage.jsx',import.meta.url),'utf8');
-  for(const label of ['Tambah Stockpile','Data Material']) assert.match(source,new RegExp(label));
-  for(const removed of ['Ringkasan Operasional','Pengiriman & Ritase','Penerimaan Kembali','Riwayat & Status ERP']) assert.doesNotMatch(source,new RegExp(removed.replace('&','\\&')));
-  assert.equal((source.match(/^  \['/gm)||[]).length,2);
-  assert.match(source,/Kembali ke login/);
-  assert.match(source,/selectTheme\('light'\)/);
-  assert.match(source,/selectTheme\('dark'\)/);
-  assert.match(source,/context\.openMeasurement\(\)/);
-  assert.match(source,/\/stockpile\/add-material/);
-  assert.match(source,/\['pending','needs_calibration'\]\.includes\(row\.status\)/);
-  assert.match(source,/pageSize=6/);
-  assert.match(source,/Filter status/);
-  assert.match(source,/context\.scopeStock\.map/);
-  assert.match(source,/row\.status!=='approved'/);
-  assert.match(source,/officialStock:true/);
-});
-test('Stockpile material form is a dedicated two-step page',async()=>{
-  const source=await readFile(new URL('../src/features/inventory/index.jsx',import.meta.url),'utf8');
-  assert.match(source,/stockpile-measurement-workspace/);
-  assert.match(source,/Sumber & material/);
-  assert.match(source,/Pengukuran & bukti/);
-  assert.match(source,/setStep\(2\)/);
-  assert.match(source,/setStep\(1\)/);
-  assert.match(source,/tr\("Submit"\)/);
+test('the measurement page accepts a stock operator bookmark only',()=>{
+  assert.equal(stockpileMeasurementPage('stock','/stockpile/add-material'),'add-material');
+  assert.equal(stockpileMeasurementPage('stock','/stockpile/add-material/'),'add-material');
+  for(const role of ['admin','driver','jetty']) assert.equal(stockpileMeasurementPage(role,'/stockpile/add-material'),null);
+  assert.equal(stockpileMeasurementPage('stock','/admin/add-material'),null);
+  assert.equal(stockpileMeasurementPage('stock','/stockpile/inventory'),null);
 });

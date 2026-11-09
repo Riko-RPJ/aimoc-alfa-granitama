@@ -32,3 +32,9 @@ export function legacyPageFromPath(role,path) {
 export function legacyPathForPage(role,page) {
   return legacyRouteByRole[role]?.[page] || null;
 }
+
+export const isStockpilePath = path => path === '/stockpile' || path.startsWith('/stockpile/');
+
+export function stockpileMeasurementPage(role, path) {
+  return role === 'stock' && /^\/stockpile\/add-material\/?$/.test(path) ? 'add-material' : null;
+}
