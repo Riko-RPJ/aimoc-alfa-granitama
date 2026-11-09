@@ -12,16 +12,12 @@ export function Brand({
     }}>{tr("AIMOC")}<span>●</span></b><span className="brand-sub">{tr("ALFA GRANITAMA")}</span></div>;
 }
 
+const partners = [
+  ["/brand/gandasari-logo.png", "Gandasari Group", "GANDASARI GROUP"],
+  ["/brand/alfa-granitama-logo.png", "PT Alfa Granitama", "ALFA GRANITAMA"],
+  ["/brand/prasetia-dwidharma-logo.png", "Prasetia Dwi Dharma", "PRASETIA DWI DHARMA"]
+];
+
 export function BrandPartners() {
-  return <div className="partners"><img src="/brand/gandasari-logo.png" alt={tr("Gandasari Group")} onError={e => {
-      e.currentTarget.style.display = 'none';
-      e.currentTarget.nextSibling.style.display = 'block';
-    }} /><b style={{
-      display: 'none'
-    }}>{tr("GANDASARI ")}<small>{tr("GROUP")}</small></b><span /><img src="/brand/alfa-granitama-logo.png" alt={tr("PT Alfa Granitama")} onError={e => {
-      e.currentTarget.style.display = 'none';
-      e.currentTarget.nextSibling.style.display = 'block';
-    }} /><b style={{
-      display: 'none'
-    }}>{tr("ALFA ")}<small>{tr("GRANITAMA")}</small></b></div>;
+  return <div className="partners" aria-label="Gandasari Group, PT Alfa Granitama, Prasetia Dwi Dharma">{partners.map(([src, alt, fallback], index) => <React.Fragment key={src}>{index > 0 && <span aria-hidden="true" />}<div className="partner-mark"><img src={src} alt={alt} onError={e => { e.currentTarget.style.display = "none"; e.currentTarget.nextSibling.style.display = "block"; }} /><b style={{display: "none"}}>{fallback}</b></div></React.Fragment>)}</div>;
 }
