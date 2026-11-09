@@ -24,7 +24,8 @@ test('authenticated live context reflects submit, replay, plan and approve trans
  let current=await read('admin');assert.equal(current.state.adminSidebarNotifications.counts.requests,1);
  await command('request.create',payload,{username:'jetty1',requestId:key});assert.equal((await read('admin')).state.adminSidebarNotifications.counts.requests,1,'Command retry cannot duplicate a submission count');
  const plan=await command('request.plan',{requestId:submitted.result.requestId});assert.equal(plan.state.adminSidebarNotifications.counts.requests,0);
- const measurement=await command('measurement.create',{stockpileId:'stock-1-3',skuId:'split-12',method:'manual',quantityValue:500,quantityUnit:'m3'},{username:'stock1',legacy:true});assert.equal(Object.hasOwn(measurement.state,'adminSidebarNotifications'),false);
+ const evidence=await call('/api/evidence','POST',{name:'notification-survey.png',dataUrl:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='},'stock1');assert.equal(evidence.status,201);
+ const measurement=await command('measurement.create',{stockpileId:'stock-1-3',skuId:'split-12',method:'manual',quantityValue:500,quantityUnit:'m3',evidenceId:evidence.body.id},{username:'stock1',legacy:true});assert.equal(Object.hasOwn(measurement.state,'adminSidebarNotifications'),false);
  current=await read('admin');assert.equal(current.state.adminSidebarNotifications.counts.inventory,1);assert.equal(current.state.adminSidebarNotifications.status,'READY');
  const beforeReads=await snapshot();for(const username of ['admin','stock1','stock2','jetty1','jetty2','sidebar-driver']){const context=await read(username);if(username!=='admin')assert.equal(Object.hasOwn(context.state,'adminSidebarNotifications'),false);}
  assert.deepEqual(await snapshot(),beforeReads,'Polling/navigation reads do not clear badges, write operation data or create action receipts');

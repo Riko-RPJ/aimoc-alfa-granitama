@@ -101,6 +101,16 @@ test('LAND 80 tonnes, one 40 tonne truck: two serial trips conserve inventory an
   assert.ok(s.erpOutbox.every(e => e.source === 'INTEGRATED_DEMO' && e.status === 'awaiting_configuration'));
 });
 
+test('a Driver may receive a different truck only after every trip in the previous dispatch is returned',()=>{
+ const s=seed({twoTrucks:true}),first=request(s,{tonnes:40}),initial=trip(s,first.tripIds[0]);
+ assert.equal(initial.assignedDriverUserId,driver1.id);
+ loadAndDepart(s,initial.id);receiveAndReturn(s,initial.id);
+ s.trucks.find(t=>t.id===initial.truckId).active=false;
+ const next=request(s,{tonnes:40});
+ const reassigned=s.trips.find(t=>t.requestId===next.requestId&&t.truckId);
+ assert.equal(reassigned.assignedDriverUserId,driver1.id);assert.notEqual(reassigned.truckId,initial.truckId);
+});
+
 test('early QR and tare reconcile after start; late QR automatically recovers pending start', () => {
   for (const order of ['QR_TARE_START', 'START_TARE_QR', 'TARE_START_QR', 'START_QR_TARE']) {
     const s = seed(), result = request(s, {tonnes: 40}), identifier = result.tripIds[0];
@@ -267,9 +277,8 @@ test('LAND destination must match SKU and cannot reserve from its own destinatio
   const s = seed();
   assert.throws(() => act(s, 'request.create', {transferMode: 'LAND', destinationId: 'crusher-2', destination: 'Marunda', lines: [{skuId: 'split-12', quantity: 1, unit: 't', destinationStockpileId: 'stock-2-1'}]}), e => e.code === 'DESTINATION_STOCKPILE_REQUIRED');
   s.stockpiles.filter(x => x.crusherId === 'crusher-1').forEach(x => x.onHandM3 = 0);
-  const created = act(s, 'request.create', {transferMode: 'LAND', destinationId: 'crusher-2', destination: 'Marunda', lines: [{skuId: 'split-12', quantity: 40, unit: 't'}]});
   const before = structuredClone(s);
-  assert.throws(() => act(s, 'request.plan', {requestId: created.entityId}), e => e.code === 'INSUFFICIENT_STOCK');
+  assert.throws(() => act(s, 'request.create', {transferMode: 'LAND', destinationId: 'crusher-2', destination: 'Marunda', lines: [{skuId: 'split-12', quantity: 40, unit: 't'}]}), e => e.code === 'MATERIAL_UNAVAILABLE');
   assert.deepEqual(s, before);
 });
 

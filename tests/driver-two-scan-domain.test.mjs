@@ -22,16 +22,16 @@ function fixture(mode='LAND',quantity=10){
  return {state,options,act,first,requestId,request,lookup,payload,scan,legacyReady,legacyReceive};
 }
 
-for(const mode of ['LAND','MARINE'])test(`${mode}: two explicit Driver scans complete planned-demo custody once without inventing weighing`,()=>{
+for(const mode of ['LAND','MARINE'])test(`${mode}: Scan1 records a sensible dummy TARE without inventing gross or net`,()=>{
  const f=fixture(mode),{state,first}=f,before=structuredClone(state),originalVolume=sum(state.stockpiles);
  const read=driverAssignmentQr(state,driver,{tripId:first.id,drivers:f.options.drivers});assert.equal(read.trip.driverScan.nextStage,1);assert.equal(read.trip.driverScan.canScan,true);assert.equal(read.canOpenTask,false);assert.deepEqual(state,before);
  const stage1=f.payload(first.id,1);f.act('trip.driver_scan',stage1,driver);
- let t=f.lookup(first.id);assert.equal(t.status,'ready_to_load');assert.equal(t.driverScanMode,'TWO_SCAN_PLANNED_DEMO');assert.equal(t.startedAt,t.driverFirstScannedAt);assert.equal(t.qrPhysicalVerified,false);assert.deepEqual(t.weighingEvents,[]);
+ let t=f.lookup(first.id);assert.equal(t.status,'ready_to_load');assert.equal(t.driverScanMode,'TWO_SCAN_PLANNED_DEMO');assert.equal(t.startedAt,t.driverFirstScannedAt);assert.equal(t.qrPhysicalVerified,false);assert.equal(t.tareT,18);assert.equal(t.weighingEvents.length,1);assert.deepEqual(t.weighingEvents[0],{id:t.tareEventId,type:'TARE',weightT:18,status:'ACCEPTED',at:t.tareAt,acceptedAt:t.tareAt,actorId:driver.id,source:'INTEGRATED_DEMO',synthetic:true,physicalMeasurementVerified:false,measurementKind:'DUMMY_TARE_AFTER_DRIVER_SCAN'});
  assert.deepEqual(state.inventoryLedger,before.inventoryLedger);assert.deepEqual(state.erpOutbox,before.erpOutbox);assert.deepEqual(state.stockpiles,before.stockpiles);
  const stage2=f.payload(first.id,2),result=f.act('trip.driver_scan',stage2,driver);t=f.lookup(first.id);
  assert.equal(t.status,'returned');assert.equal(result.displayStatus,'completed');assert.equal(t.returnVerifiedBy,driver.id);assert.ok(t.receiptCode);assert.ok(t.driverSecondScannedAt);
- for(const key of ['tareT','grossT','netT','tareEventId','grossEventId'])assert.equal(Object.hasOwn(t,key),false);
- assert.deepEqual(t.weighingEvents,[]);assert.equal(state.requests.find(r=>r.id===f.requestId).status,'completed');
+ for(const key of ['grossT','netT','grossEventId'])assert.equal(Object.hasOwn(t,key),false);
+ assert.equal(t.tareT,18);assert.equal(t.weighingEvents.length,1);assert.equal(state.requests.find(r=>r.id===f.requestId).status,'completed');
  const entries=state.erpOutbox.filter(row=>row.entityId===t.id);assert.equal(entries.length,2);assert.ok(entries.every(row=>row.payload.quantitySource==='PLANNED_DEMO_DRIVER_CONFIRMATION'&&row.payload.measurementPending===true&&row.status==='awaiting_configuration'));
  assert.equal(state.inventoryLedger.filter(row=>row.referenceId===t.id).length,2);
  const sourceBefore=before.stockpiles.find(s=>s.id===t.stockpileId),sourceAfter=state.stockpiles.find(s=>s.id===t.stockpileId);near(sourceAfter.onHandM3,sourceBefore.onHandM3-t.volumeM3);near(sourceAfter.reservedM3,0);
@@ -68,8 +68,17 @@ test('serial dispatch claims stay exclusive until every queued trip returns, the
  assert.equal(serial.length,2);const nextRequest=f.request();f.act('request.plan',{requestId:nextRequest});const waiting=f.state.trips.find(row=>row.requestId===nextRequest);assert.equal(waiting.status,'waiting_truck');
  assert.throws(()=>f.scan(serial[1].id,1),error=>error.code==='QUEUE_ORDER');
  f.scan(serial[0].id,1);assert.throws(()=>f.scan(serial[1].id,1),error=>error.code==='TRUCK_OR_DRIVER_BUSY');f.scan(serial[0].id,2);
- assert.equal(f.lookup(waiting.id).status,'waiting_truck');assert.equal(integratedView(f.state,driver,f.options).fleet[0].status,'allocated');
- f.scan(serial[1].id,1);f.scan(serial[1].id,2);assert.equal(f.lookup(waiting.id).status,'queued');assert.equal(f.lookup(waiting.id).assignedDriverUserId,driver.id);
+ assert.equal(f.lookup(waiting.id).status,'waiting_truck');assert.equal(integratedView(f.state,driver,f.options).fleet[0].status,'busy');
+ assert.equal(f.lookup(serial[1].id).status,'ready_to_load');assert.equal(f.lookup(serial[1].id).driverScanOrigin,'DISPATCH_CONTINUATION');assert.equal(driverAssignmentQr(f.state,driver,{tripId:serial[1].id,drivers:f.options.drivers}).loadDetails.scanNumber,1);
+ f.scan(serial[1].id,2);assert.equal(f.lookup(waiting.id).status,'queued');assert.equal(f.lookup(waiting.id).assignedDriverUserId,driver.id);
+});
+
+test('one entry scan continuously activates every later trip for the same truck and dispatch',()=>{
+ const f=fixture('MARINE',80),serial=f.state.trips.filter(row=>row.requestId===f.requestId).sort((a,b)=>a.sequence-b.sequence);
+ f.scan(serial[0].id,1);f.scan(serial[0].id,2);
+ const next=f.lookup(serial[1].id),descriptor=driverAssignmentQr(f.state,driver,{tripId:next.id,drivers:f.options.drivers});
+ assert.equal(next.status,'ready_to_load');assert.equal(next.driverScanOrigin,'DISPATCH_CONTINUATION');assert.equal(next.tareT,18);assert.equal(next.weighingEvents[0].measurementKind,'DUMMY_TARE_DISPATCH_REUSE');assert.equal(descriptor.loadDetails.tripNumber,2);assert.equal(descriptor.loadDetails.tripCount,2);assert.equal(descriptor.trip.driverScan.nextStage,2);
+ assert.throws(()=>f.scan(next.id,1),error=>error.code==='DRIVER_SCAN_STAGE_CONFLICT');
 });
 
 test('new scan mode blocks all old operational commands while untouched legacy workflows retain their behavior',()=>{

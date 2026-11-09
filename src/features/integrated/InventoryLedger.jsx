@@ -20,6 +20,7 @@ export function InventoryLedger({stockpiles,products,crushers,trips,L,fmt}){
  useEffect(()=>{if(areaFilter!==effectiveArea)setAreaFilter(effectiveArea);},[areaFilter,effectiveArea]);
  useEffect(()=>{if(stockpileFilter!==effectiveStockpile)setStockpileFilter(effectiveStockpile);},[stockpileFilter,effectiveStockpile]);
  const areaName=id=>{const area=areaById.get(id);return area?`${area.code||''}${area.code&&area.name?' · ':''}${area.name||''}`:id===UNASSIGNED?L('Area stok belum ditentukan','Inventory area not specified'):id;};
+ const quantity=(m3,density)=>known(m3)&&known(density)&&density>0?<><b>{fmt(m3*density)} t</b><small>{fmt(m3)} m³</small></>:'—';
  const headers=[L('Stockpile / area stok','Stockpile / inventory area'),'SKU',L('Stok tercatat','On hand'),L('Direservasi','Reserved'),L('Tersedia','Available'),L('Dalam perjalanan dari sumber','In transit from source'),L('Diterima ke lokasi ini','Received at this location')];
  return <section className="ig-panel ig-inventory-ledger" data-testid="inventory-ledger" aria-labelledby="inventory-ledger-title">
   <div className="ig-panel-head"><div><h2 id="inventory-ledger-title">{L('Persediaan per stockpile / area stok','Inventory by stockpile / area')}</h2><p>{L('Stok tercatat berkurang saat berangkat dan bertambah saat penerimaan LAND. Reservasi mengurangi stok bebas, bukan menambah stok fisik.','On-hand stock decreases at departure and increases on LAND receipt. Reservations reduce free stock; they do not add physical stock.')}</p></div><Layers3 size={22} aria-hidden="true"/></div>
@@ -37,11 +38,11 @@ export function InventoryLedger({stockpiles,products,crushers,trips,L,fmt}){
     return <tr key={pile.id} data-stockpile-id={pile.id} data-area-id={group.id}>
      <td><b>{pile.code||pile.id}</b><small>{areaName(group.id)}</small>{pile.active===false&&<small className="ig-inventory-inactive">{L('Nonaktif','Inactive')}</small>}</td>
      <td><b>{product?.code||pile.skuId||L('Belum ada SKU','No SKU assigned')}</b><small>{product?.name||(!product&&pile.skuId?L('SKU belum tersedia di master','SKU unavailable in master'):'')}</small></td>
-     <td data-inventory-value="on-hand">{known(pile.onHandM3)?`${fmt(pile.onHandM3)} m³`:'—'}</td>
-     <td data-inventory-value="reserved">{known(pile.reservedM3)?`${fmt(pile.reservedM3)} m³`:'—'}</td>
-     <td data-inventory-value="available"><b>{known(pile.onHandM3)&&known(pile.reservedM3)?`${fmt(number(pile.onHandM3)-number(pile.reservedM3))} m³`:'—'}</b></td>
-     <td>{outbound.every(trip=>known(trip.volumeM3))?`${fmt(outbound.reduce((sum,trip)=>sum+number(trip.volumeM3),0))} m³`:'—'}</td>
-     <td>{received.every(trip=>known(trip.actualVolumeM3??trip.volumeM3))?`${fmt(received.reduce((sum,trip)=>sum+number(trip.actualVolumeM3??trip.volumeM3),0))} m³`:'—'}</td>
+     <td data-inventory-value="on-hand">{quantity(pile.onHandM3,product?.densityTPerM3)}</td>
+     <td data-inventory-value="reserved">{quantity(pile.reservedM3,product?.densityTPerM3)}</td>
+     <td data-inventory-value="available">{known(pile.onHandM3)&&known(pile.reservedM3)?quantity(number(pile.onHandM3)-number(pile.reservedM3),product?.densityTPerM3):'—'}</td>
+     <td>{outbound.every(trip=>known(trip.volumeM3)&&known(trip.tonnageT))?<><b>{fmt(outbound.reduce((sum,trip)=>sum+number(trip.tonnageT),0))} t</b><small>{fmt(outbound.reduce((sum,trip)=>sum+number(trip.volumeM3),0))} m³</small></>:'—'}</td>
+     <td>{received.every(trip=>known(trip.actualVolumeM3??trip.volumeM3)&&known(trip.actualNetT??trip.tonnageT))?<><b>{fmt(received.reduce((sum,trip)=>sum+number(trip.actualNetT??trip.tonnageT),0))} t</b><small>{fmt(received.reduce((sum,trip)=>sum+number(trip.actualVolumeM3??trip.volumeM3),0))} m³</small></>:'—'}</td>
     </tr>;
    })}</tbody></table></div>
   </article>)}

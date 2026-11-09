@@ -5,6 +5,7 @@ export const ASSIGNMENT_QR_ERROR_CORRECTION = 'M';
 export const ASSIGNMENT_QR_MAX_BYTES = 1024;
 const referenceFields = Object.freeze({
   AIMOC_ASSIGNMENT_REFERENCE: Object.freeze(['v','type','requestId','dispatchId','tripId','truckId']),
+  AIMOC_DRIVER_DISPATCH_REFERENCE: Object.freeze(['v','type','dispatchId','truckId','assignedDriverUserId']),
   AIMOC_QUARRY_DISPATCH_PASS: Object.freeze(['v','type','dispatchId','truckId','assignedDriverUserId'])
 });
 const identifier = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(value);

@@ -46,9 +46,10 @@ test('authenticated survey quantities persist original units, canonical stock an
  assert.equal(persisted.stockpiles.find(p=>p.id===pileId).onHandM3,100);
  const intent=persisted.erpOutbox.find(e=>e.entityId===id).payload;assert.equal(intent.quantityValue,150);assert.equal(intent.quantityUnit,'t');assert.equal(intent.volumeM3,100);assert.equal(intent.densityTPerM3Snapshot,1.5);
  const afterApproval=await doc();assert.equal((await action('measurement.approve',{measurementId:id})).status,409);assert.deepEqual(await doc(),afterApproval);
- const stockCreated=await action('measurement.create',{...payload,quantityValue:120,quantityUnit:'m3'},'stock1');assert.equal(stockCreated.status,200,JSON.stringify(stockCreated.body));
+ const evidence=await call('/api/evidence','POST',{name:'survey.png',dataUrl:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='},'stock1');assert.equal(evidence.status,201,JSON.stringify(evidence.body));
+ const stockCreated=await action('measurement.create',{...payload,quantityValue:120,quantityUnit:'m3',evidenceId:evidence.body.id},'stock1');assert.equal(stockCreated.status,200,JSON.stringify(stockCreated.body));
  const stockMeasure=(await doc()).document.measurements.find(m=>m.id===stockCreated.body.result.entityId);assert.equal(stockMeasure.quantityValue,120);assert.equal(stockMeasure.quantityUnit,'m3');assert.equal(stockMeasure.tonnageT,240);assert.equal(stockMeasure.densityTPerM3Snapshot,2);
  const stockView=await call('/api/v1/demo/context','GET',undefined,'stock1');assert.ok(stockView.body.state.measurements.every(m=>m.crusherId==='crusher-1'));
  assert.equal((await call('/api/v1/demo/context','GET',undefined,'jetty1')).body.state.measurements.length,0);
- const legacy=await action('measurement.create',{stockpileId:pileId,method:'manual',volumeM3:80},'stock1');assert.equal(legacy.status,200);assert.equal(legacy.body.state.measurements.find(m=>m.id===legacy.body.result.entityId).quantityUnit,'m3');
+ const legacy=await action('measurement.create',{stockpileId:pileId,method:'manual',volumeM3:80,evidenceId:evidence.body.id},'stock1');assert.equal(legacy.status,200);assert.equal(legacy.body.state.measurements.find(m=>m.id===legacy.body.result.entityId).quantityUnit,'m3');
 });

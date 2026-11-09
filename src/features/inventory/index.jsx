@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { tr, localize, locale, useLanguage, setLanguage, eventText, eventTypeLabel } from '../../i18n.js';
 import { statusText } from '../../domain/legacy-status.js';
 import { api } from '../../services/legacy-api.js';
-import { Camera, CheckCircle2, ClipboardCheck, Filter, Layers3, Loader2, Package, Search, ShieldCheck, Upload, X } from 'lucide-react';
+import { Camera, CheckCircle2, ClipboardCheck, Filter, Layers3, Loader2, LogOut, Package, Search, ShieldCheck, Upload, X } from 'lucide-react';
 import { fmt, number, lookup } from '../shared/legacy-utils.js';
 import { Empty, Button, Field, Modal, Panel, DataTable } from '../../components/ui/index.jsx';
 import {previewMeasurementQuantity} from '../../../shared/measurement-units.mjs';
@@ -37,7 +37,10 @@ export function MeasurementModal({
   canUploadEvidence = true,
   onClose,
   onSubmit,
-  embedded = false
+  embedded = false,
+  logout,
+  theme = 'light',
+  onThemeChange
 }) {
   const [stockpileId, setStockpile] = useState(initial.stockpileId || scopeStock[0]?.id || ''),
     [method, setMethod] = useState(canUploadEvidence ? 'camera_pending' : 'manual'),
@@ -57,22 +60,16 @@ export function MeasurementModal({
     [cameraError, setCameraError] = useState(''),
     [saving, setSaving] = useState(false),
     [uploaded, setUploaded] = useState(null),
-    [error, setError] = useState('');
+    [error, setError] = useState(''),
+    [step, setStep] = useState(1);
   const sourceGeneration = useRef(0);
   const stream = useRef(null),
     video = useRef(null),
     file = useRef(null);
   const selected = lookup(scopeStock, stockpileId),
-    sourceProduct = lookup(products, selected?.skuId),
-    p = lookup(products, confirmedSku) || sourceProduct,
+    p = lookup(products, confirmedSku),
     c = lookup(crushers, selected?.crusherId);
-  const matchingStockpiles = skuId => {
-    const product = lookup(products, skuId);
-    if (!selected || !c || c.active === false || !product || product.active === false) return [];
-    return scopeStock.filter(stock => stock.active !== false && stock.crusherId === selected.crusherId && stock.skuId === skuId);
-  };
-  const skuCandidates = confirmedSku ? matchingStockpiles(confirmedSku) : [];
-  const skuMismatch = Boolean(confirmedSku && !skuCandidates.some(stock => stock.id === stockpileId));
+  const skuMismatch = Boolean(confirmedSku && (!p || p.active === false));
   const estimated = number(geometry.lengthM) * number(geometry.widthM) * number(geometry.heightM) * number(geometry.shapeFactor);
   const densityValid = typeof p?.densityTPerM3 === 'number' && Number.isFinite(p.densityTPerM3) && p.densityTPerM3 > 0 && p.densityTPerM3 <= 5;
   const manualPreview = quantityValue === '' ? null : previewMeasurementQuantity(Number(quantityValue), quantityUnit, p?.densityTPerM3);
@@ -93,16 +90,14 @@ export function MeasurementModal({
     }
     setStockpile(nextId); setConfirmedSku(nextSku); setError('');
   };
-  const chooseSku = skuId => {
-    const candidates = matchingStockpiles(skuId);
-    const next = candidates.find(stock => stock.id === stockpileId) || (candidates.length === 1 ? candidates[0] : null);
-    if (next) changeSource(next.id, skuId);
-    else { setConfirmedSku(skuId); setError(''); }
-  };
+  const chooseSku = skuId => {setConfirmedSku(skuId);setError('');};
   useEffect(() => () => {
     sourceGeneration.current++;
     stream.current?.getTracks().forEach(t => t.stop());
   }, []);
+  useEffect(() => {
+    if (!stockpileId && scopeStock[0]) setStockpile(scopeStock[0].id);
+  }, [stockpileId, scopeStock]);
   useEffect(() => {
     if (camera && video.current && stream.current) {
       video.current.srcObject = stream.current;
@@ -178,8 +173,8 @@ export function MeasurementModal({
       setError('SKU yang dikonfirmasi harus sesuai dengan stockpile dan ukuran material.');
       return;
     }
-    if (method === 'camera_pending' && !photo) {
-      setError('Ambil atau unggah foto untuk menyimpan bukti kamera.');
+    if (!photo && !uploaded) {
+      setError('Unggah evidence foto sebelum mengirim pengajuan.');
       return;
     }
     if (method === 'manual' && !manualPreview?.valid) {
@@ -204,7 +199,7 @@ export function MeasurementModal({
       }
       const payload = {
         stockpileId,
-        skuId: selected.skuId,
+        skuId: confirmedSku,
         method,
         notes,
         evidenceId: evidence?.id,
@@ -227,16 +222,16 @@ export function MeasurementModal({
   const nextStep=()=>{
     setError('');
     if(!stockpileId){setError('Pilih sumber crusher atau stockpile.');return;}
-    if(confirmedSku!==selected?.skuId){setError('SKU yang dikonfirmasi harus sesuai dengan stockpile dan ukuran material.');return;}
+    if(!confirmedSku||skuMismatch){setError('Pilih SKU material aktif.');return;}
     setStep(2);
   };
   if(embedded)return <main className="stockpile-measurement-workspace">
-    <header className="stockpile-measurement-header"><button type="button" onClick={onClose} className="stockpile-measurement-back"><span>←</span> Kembali ke menu</button><div><h1>{tr("Tambah Material")}</h1><p>{tr("Lengkapi data pengukuran stockpile dalam dua langkah.")}</p></div></header>
+    <header className="stockpile-measurement-header"><button type="button" onClick={()=>{stopCamera();onClose();}} className="stockpile-measurement-back"><span>←</span> Kembali ke menu</button><div><h1>{tr("Tambah Material")}</h1><p>{tr("Lengkapi data pengukuran stockpile dalam dua langkah.")}</p></div><div className="stockpile-measurement-tools"><div className="stockpile-menu-theme" role="group" aria-label="Tema tampilan"><button type="button" className={theme==='light'?'active':''} onClick={()=>onThemeChange?.('light')} aria-label="Gunakan tema terang"><img src="/login/sun.png" alt=""/></button><button type="button" className={theme==='dark'?'active':''} onClick={()=>onThemeChange?.('dark')} aria-label="Gunakan tema gelap"><img src="/login/moon.png" alt=""/></button></div><button type="button" className="stockpile-measurement-logout" onClick={logout}><LogOut/>Keluar</button></div></header>
     <nav className="stockpile-form-steps" aria-label="Tahapan penambahan material"><span className={step===1?'active':'done'}><b>1</b><em>Sumber & material</em></span><i/><span className={step===2?'active':''}><b>2</b><em>Pengukuran & bukti</em></span></nav>
     <form className="stockpile-step-form" onSubmit={submit}>
-      {step===1?<section className="stockpile-step-panel"><div className="stockpile-step-heading"><small>LANGKAH 1 DARI 2</small><h2>Sumber dan material</h2><p>Pilih lokasi, pastikan SKU sesuai, lalu tambahkan catatan referensi.</p></div><div className="stockpile-step-fields"><Field label={tr("Stockpile / sumber crusher")}><select required value={stockpileId} onChange={e=>{setStockpile(e.target.value);setConfirmedSku('')}}>{scopeStock.map(s=><option key={s.id} value={s.id}>{s.code} · {lookup(crushers,s.crusherId)?.name}</option>)}</select></Field><Field label={tr("Konfirmasi SKU material yang diukur")}><select required value={confirmedSku} onChange={e=>setConfirmedSku(e.target.value)}><option value="">{tr("Pilih SKU sesuai ukuran batu…")}</option>{products.filter(x=>x.active!==false).map(x=><option key={x.id} value={x.id}>{x.code} · {x.name} ({x.sizeMm})</option>)}</select></Field><div className="sku-context"><span className="sku-context-icon"><Package size={22}/></span><div><small>{tr("SKU sesuai master Admin")}</small><b>{p?.code} · {p?.name}</b><small>{tr("Ukuran ")}{p?.sizeMm}{tr(" · berat jenis ")}{fmt(p?.densityTPerM3,2)}{tr(" t/m³")}</small></div></div><Field label={tr("Catatan / referensi kalibrasi")}><textarea rows={4} maxLength={500} value={notes} onChange={e=>setNotes(e.target.value)} placeholder={tr("Nomor survei, kondisi stockpile, atau catatan operator…")}/></Field></div></section>:<section className="stockpile-step-panel stockpile-step-two"><div className="stockpile-step-heading"><small>LANGKAH 2 DARI 2</small><h2>Pengukuran dan bukti</h2><p>Pilih metode pencatatan, isi hasil ukur yang diperlukan, lalu tambahkan bukti foto.</p></div><div className="measurement-layout"><div className="measurement-form"><Field label={tr("Metode pencatatan")}><select value={method} onChange={e=>setMethod(e.target.value)}><option value="camera_pending">{tr("Bukti kamera — menunggu pengukuran")}</option><option value="manual">{tr("Hasil survei lapangan (m³)")}</option><option value="calibrated_geometry">{tr("Estimasi geometri terkalibrasi")}</option></select></Field>{method==='manual'&&<Field label={tr("Volume hasil survei (m³)")} hint={tr("Isi hasil ukur lapangan yang dapat ditelusuri, bukan perkiraan dari foto tunggal.")}><input required type="number" min="0" max="10000000" step="0.01" value={volumeM3} onChange={e=>setVolume(e.target.value)} placeholder={tr("0,00")}/></Field>}{method==='calibrated_geometry'&&<><div className="notice compact">{tr("V = panjang × lebar × tinggi × faktor bentuk. Hasil tetap menunggu validasi.")}</div><div className="form-grid two">{[["lengthM",tr("Panjang (m)")],["widthM",tr("Lebar (m)")],["heightM",tr("Tinggi (m)")],["shapeFactor",tr("Faktor bentuk (0–1)")]].map(([key,label])=><Field key={key} label={label}><input required type="number" min="0.01" max={key==='shapeFactor'?'1':'10000'} step="0.01" value={geometry[key]} onChange={e=>setGeometry({...geometry,[key]:e.target.value})}/></Field>)}</div><div className="measurement-result"><small>{tr("Estimasi volume geometri")}</small><strong>{fmt(estimated,2)} <em>m³</em></strong><span>≈ {fmt(estimated*number(p?.densityTPerM3),2)} ton · belum masuk stok</span></div></>}{method==='camera_pending'&&<div className="notice compact"><Camera size={17}/><span>{tr("Hanya bukti foto yang disimpan. Volume dan stok tidak berubah sampai pengukuran terkalibrasi dicatat dan disetujui.")}</span></div>}</div><div className="camera-column"><div className={`camera-preview ${photo||camera?'has-image':''}`}>{camera?<video ref={video} playsInline muted autoPlay/>:photo?<img src={photo} alt={tr("Foto stockpile yang dipilih operator")}/>:<><Camera size={39}/><strong>{tr("Foto stockpile")}</strong><p>{tr("Ambil foto atau unggah bukti kondisi stockpile.")}</p></>}<span className="camera-chip"><span/>{camera?tr("Kamera perangkat aktif"):photo?tr("Foto dari operator"):tr("Belum ada foto dipilih")}</span></div><div className="camera-actions">{camera?<><Button icon={Camera} onClick={takePhoto}>{tr("Ambil foto")}</Button><Button variant="secondary" onClick={stopCamera}>{tr("Matikan")}</Button></>:<><Button variant="secondary" icon={Camera} onClick={openCamera}>{tr("Buka kamera")}</Button><Button variant="secondary" icon={Upload} onClick={()=>file.current?.click()}>{tr("Unggah foto")}</Button></>}<input ref={file} type="file" accept="image/jpeg,image/png" capture="environment" hidden onChange={selectPhoto}/></div>{photoName&&<p className="photo-name"><CheckCircle2 size={14}/>{photoName}</p>}{cameraError&&<p className="form-error" role="alert">{tr(cameraError)}</p>}</div></div></section>}
+      {step===1?<section className="stockpile-step-panel"><div className="stockpile-step-heading"><small>LANGKAH 1 DARI 2</small><h2>Sumber dan material</h2><p>Pilih lokasi dan SKU, lalu tambahkan catatan referensi.</p></div><div className="stockpile-step-fields"><Field label={tr("Stockpile / sumber crusher")}><select required value={stockpileId} onChange={e=>changeSource(e.target.value,confirmedSku)}>{scopeStock.map(s=><option key={s.id} value={s.id}>{s.code} · {lookup(crushers,s.crusherId)?.name}</option>)}</select></Field><Field label={tr("SKU material yang diukur")}><select required value={confirmedSku} onChange={e=>chooseSku(e.target.value)}><option value="">{tr("Pilih SKU sesuai ukuran batu…")}</option>{products.filter(x=>x.active!==false).map(x=><option key={x.id} value={x.id}>{x.code} · {x.name} ({x.sizeMm})</option>)}</select></Field><div className="sku-context"><span className="sku-context-icon"><Package size={22}/></span><div><small>{tr("SKU ditambahkan setelah persetujuan Admin")}</small><b>{p?`${p.code} · ${p.name}`:'Pilih SKU material'}</b>{p&&<small>{tr("Ukuran ")}{p.sizeMm}{tr(" · berat jenis ")}{fmt(p.densityTPerM3,2)}{tr(" t/m³")}</small>}</div></div><Field label={tr("Catatan / referensi kalibrasi")}><textarea rows={4} maxLength={500} value={notes} onChange={e=>setNotes(e.target.value)} placeholder={tr("Nomor survei, kondisi stockpile, atau catatan operator…")}/></Field></div></section>:<section className="stockpile-step-panel stockpile-step-two"><div className="stockpile-step-heading"><small>LANGKAH 2 DARI 2</small><h2>Pengukuran dan bukti</h2><p>Pilih metode pencatatan, isi hasil ukur, lalu unggah evidence foto wajib.</p></div><div className="measurement-layout"><div className="measurement-form"><Field label={tr("Metode pencatatan")}><select value={method} onChange={e=>setMethod(e.target.value)}><option value="camera_pending">{tr("Bukti kamera — menunggu pengukuran")}</option><option value="manual">{tr("Hasil survei lapangan")}</option><option value="calibrated_geometry">{tr("Estimasi geometri terkalibrasi")}</option></select></Field>{method==='manual'&&<div className="form-grid two"><Field label={tr("Satuan hasil survei")}><select value={quantityUnit} onChange={e=>{setQuantityUnit(e.target.value);setQuantity('')}}><option value="m3">Volume (m³)</option><option value="t" disabled={!densityValid}>Tonase (ton)</option></select></Field><Field label={tr(quantityUnit==='t'?"Tonase hasil survei (ton)":"Volume hasil survei (m³)")}><input required type="number" min="0" max="1000000000" step="0.000001" value={quantityValue} onChange={e=>setQuantity(e.target.value)} placeholder={tr("0,00")}/></Field></div>}{method==='calibrated_geometry'&&<><div className="notice compact">{tr("V = panjang × lebar × tinggi × faktor bentuk. Hasil tetap menunggu validasi.")}</div><div className="form-grid two">{[["lengthM",tr("Panjang (m)")],["widthM",tr("Lebar (m)")],["heightM",tr("Tinggi (m)")],["shapeFactor",tr("Faktor bentuk (0–1)")]].map(([key,label])=><Field key={key} label={label}><input required type="number" min="0.01" max={key==='shapeFactor'?'1':'10000'} step="0.01" value={geometry[key]} onChange={e=>setGeometry({...geometry,[key]:e.target.value})}/></Field>)}</div><div className="measurement-result"><small>{tr("Estimasi volume geometri")}</small><strong>{fmt(estimated,2)} <em>m³</em></strong><span>≈ {fmt(estimated*number(p?.densityTPerM3),2)} ton · belum masuk stok</span></div></>}{method==='camera_pending'&&<div className="notice compact"><Camera size={17}/><span>{tr("Hanya bukti foto yang disimpan. Volume dan stok tidak berubah sampai pengukuran terkalibrasi dicatat dan disetujui.")}</span></div>}</div><div className="camera-column"><div className={`camera-preview ${photo||camera?'has-image':''}`}>{camera?<video ref={video} playsInline muted autoPlay/>:photo?<img src={photo} alt={tr("Evidence stockpile yang dipilih operator")}/>:<><Camera size={39}/><strong>{tr("Evidence foto wajib")}</strong><p>{tr("Ambil foto atau unggah bukti kondisi stockpile.")}</p></>}<span className="camera-chip"><span/>{camera?tr("Kamera perangkat aktif"):photo?tr("Evidence siap dikirim"):tr("Belum ada evidence")}</span></div><div className="camera-actions">{camera?<><Button icon={Camera} onClick={takePhoto}>{tr("Ambil foto")}</Button><Button variant="secondary" onClick={stopCamera}>{tr("Matikan")}</Button></>:<><Button variant="secondary" icon={Camera} onClick={openCamera}>{tr("Buka kamera")}</Button><Button variant="secondary" icon={Upload} onClick={()=>file.current?.click()}>{tr("Unggah foto")}</Button></>}<input ref={file} type="file" accept="image/jpeg,image/png" capture="environment" hidden onChange={selectPhoto}/></div>{photoName&&<p className="photo-name"><CheckCircle2 size={14}/>{photoName}</p>}{cameraError&&<p className="form-error" role="alert">{tr(cameraError)}</p>}</div></div></section>}
       {error&&<div className="form-error" role="alert">{tr(error)}</div>}
-      <footer className="stockpile-step-actions"><span>Langkah {step} dari 2</span>{step===1?<Button onClick={nextStep}>Selanjutnya</Button>:<><Button variant="secondary" onClick={()=>setStep(1)}>Sebelumnya</Button><Button type="submit" disabled={busy||saving||!selected} icon={saving?Loader2:ClipboardCheck}>{saving?tr("Mengirim…"):tr("Submit")}</Button></>}</footer>
+      <footer className="stockpile-step-actions"><span>Langkah {step} dari 2</span>{step===1?<Button onClick={nextStep}>Selanjutnya</Button>:<><Button variant="secondary" onClick={()=>setStep(1)}>Sebelumnya</Button><Button type="submit" disabled={busy||saving||!selected||!confirmedSku||(!photo&&!uploaded)} icon={saving?Loader2:ClipboardCheck}>{saving?tr("Mengirim…"):tr("Submit")}</Button></>}</footer>
     </form>
   </main>;
   return <Modal wide embedded={embedded} title={tr("Pengukuran & kamera stockpile")} subtitle={tr("Pilih lokasi dan SKU. Bukti kamera dan hasil ukur selalu memiliki sumber yang jelas.")} onClose={() => {

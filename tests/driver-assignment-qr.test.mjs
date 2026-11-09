@@ -33,10 +33,12 @@ test('Driver and Admin use bit-identical canonical QR bytes and expose only the 
  const adminDto=driverAssignmentQr(state,admin,{tripId:target.id,drivers});
  const driverDto=driverAssignmentQr(state,driver1,{tripId:target.id,drivers});
  assert.equal(driverDto.qr.value,canonical.qr.value);assert.equal(driverDto.qr.value,adminDto.qr.value);
- assert.deepEqual(JSON.parse(driverDto.qr.value),{v:1,type:'AIMOC_ASSIGNMENT_REFERENCE',requestId:target.requestId,dispatchId:target.dispatchId,tripId:target.id,truckId:target.truckId});
+ assert.deepEqual(JSON.parse(driverDto.qr.value),{v:1,type:'AIMOC_DRIVER_DISPATCH_REFERENCE',dispatchId:target.dispatchId,truckId:target.truckId,assignedDriverUserId:driver1.id});
  assert.deepEqual(driverDto.binding,{requestId:target.requestId,dispatchId:target.dispatchId,tripId:target.id,truckId:target.truckId,sourceStockpileId:target.stockpileId,sourceCrusherId:target.crusherId,skuId:target.skuId,assignedDriverUserId:driver1.id});
  assert.equal(driverDto.qrReferenceOnly,true);assert.equal(driverDto.scanRecorded,false);assert.equal(driverDto.authorizationGranted,false);
  assert.equal(driverDto.qr.isAuthorization,false);assert.equal(driverDto.qr.physicalScan,false);assert.equal(driverDto.canOpenTask,false);assert.equal(driverDto.canOpenTaskDeprecated,true);
+ const truck=state.trucks.find(row=>row.id===target.truckId),product=state.products.find(row=>row.id===target.skuId),stock=state.stockpiles.find(row=>row.id===target.stockpileId),crusher=state.crushers.find(row=>row.id===target.crusherId);
+ assert.equal(driverDto.loadDetails,null,'Before a committed scan, load details must remain hidden');
  assert.equal(driverDto.trip.id,target.id);assert.equal('trips' in driverDto,false);assert.equal('lines' in driverDto.request,false);assert.equal('summary' in driverDto.dispatch,false);
  const json=JSON.stringify(driverDto);
  for(const privateValue of ['PRIVATE_TEST_HASH','PRIVATE_ERP_SECRET','PRIVATE_OUTBOX_PAYLOAD',driver2.id,driver2.username,driver2.displayName])assert.ok(!json.includes(privateValue));

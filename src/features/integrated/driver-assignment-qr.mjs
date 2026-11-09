@@ -14,9 +14,19 @@ export function selectDriverAssignmentQr(data,expectedTrip,driverUserId){
  const rowSource={sourceStockpileId:expectedTrip.sourceStockpileId||expectedTrip.stockpileId,sourceCrusherId:expectedTrip.sourceCrusherId||expectedTrip.crusherId,skuId:expectedTrip.skuId};
  if(Object.entries(rowSource).some(([key,value])=>value!=null&&binding[key]!==value)||trip.sourceStockpileId&&binding.sourceStockpileId!==trip.sourceStockpileId||trip.sourceCrusherId&&binding.sourceCrusherId!==trip.sourceCrusherId)return null;
  if(typeof qr.value!=='string'||qr.value!==trip.qr?.value||qr.isAuthorization!==false||qr.physicalScan!==false||trip.qr?.isAuthorization!==false||trip.qr?.physicalScan!==false)return null;
- try{const reference=JSON.parse(qr.value),keys=['v','type','requestId','dispatchId','tripId','truckId'];if(!reference||Object.keys(reference).length!==keys.length||!keys.every(key=>Object.hasOwn(reference,key))||reference.v!==1||reference.type!=='AIMOC_ASSIGNMENT_REFERENCE'||!same(reference,binding,['requestId','dispatchId','tripId','truckId']))return null;}catch{return null;}
+ try{const reference=JSON.parse(qr.value),keys=['v','type','dispatchId','truckId','assignedDriverUserId'];if(!reference||Object.keys(reference).length!==keys.length||!keys.every(key=>Object.hasOwn(reference,key))||reference.v!==1||reference.type!=='AIMOC_DRIVER_DISPATCH_REFERENCE'||!same(reference,binding,['dispatchId','truckId','assignedDriverUserId'])||!same(data.qrScope,reference,['dispatchId','truckId','assignedDriverUserId']))return null;}catch{return null;}
+ const load=data.loadDetails;
+ if(load!==null&&load!==undefined){
+  if(![1,2].includes(load.scanNumber)||!Number.isSafeInteger(load.tripNumber)||load.tripNumber<1||!Number.isSafeInteger(load.tripCount)||load.tripCount<load.tripNumber||
+   typeof load.plannedTonnageT!=='number'||!Number.isFinite(load.plannedTonnageT)||load.plannedTonnageT<=0||
+   typeof load.plannedVolumeM3!=='number'||!Number.isFinite(load.plannedVolumeM3)||load.plannedVolumeM3<=0||
+   !['PLANNED_DEMO','VERIFIED_WEIGHING'].includes(load.quantityBasis))return null;
+  if(!['truckCode','plate','driverName','materialIndex','materialCode','materialName','stockpileCode','crusherCode'].every(key=>typeof load[key]==='string'&&load[key].trim())||
+   load.tareT!==null&&(typeof load.tareT!=='number'||!Number.isFinite(load.tareT)||load.tareT<=0))return null;
+  if(load.quantityBasis==='PLANNED_DEMO'&&(load.actualTonnageT!==null||load.actualVolumeM3!==null))return null;
+ }
  const historical=data.historical===true||qr.historical===true||terminal.has(trip.status);
- return {trip,request:data.request,dispatch:data.dispatch,binding,qr,historical,driverScan:trip.driverScan||null};
+ return {trip,request:data.request,dispatch:data.dispatch,binding,qr,loadDetails:load,historical,driverScan:trip.driverScan||null};
 }
 
 /** The server supplies scan eligibility; displaying a QR alone grants no action. */

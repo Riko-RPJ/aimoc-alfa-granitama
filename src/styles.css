@@ -33,8 +33,12 @@
 .stock-login-eye:focus-visible,.stock-login-submit:focus-visible,.stock-login-theme button:focus-visible,.stock-login-options input:focus-visible{outline:3px solid #087fbd;outline-offset:3px}
 .stock-login.dark .stock-login-card{background:#102536;border-color:#526f80;box-shadow:0 20px 45px #0007;filter:none}
 .stock-login.dark .stock-login-field{background:#203b4d;border-color:#587688}.stock-login.dark .stock-login-field input::placeholder{color:#c2d0d8}.stock-login.dark .stock-login-options{color:#d3dee4}.stock-login.dark .stock-login-submit{box-shadow:0 10px 24px #00a8d13b}
+.stock-login-submit{font-weight:500}.stock-login-field>img,.stock-login-field>svg,.stock-login-eye{color:#536c7d}.stock-login-field>img{opacity:.78}.stock-login-eye svg{width:28px;height:28px;stroke-width:1.8}.stock-login.dark .stock-login-field>img{filter:brightness(0) invert(1);opacity:.82}.stock-login.dark .stock-login-field>svg,.stock-login.dark .stock-login-eye{color:#d5e1e7}.stock-login-options{justify-content:flex-start}
 @media(max-width:1100px) and (orientation:landscape){.stock-login-card{gap:15px}.stock-login-options{font-size:16px;line-height:1.4}.stock-login-submit{font-size:21px}}
 @media(max-width:700px),(orientation:portrait){.stock-login-card{border-radius:28px}.stock-login-options{font-size:15px;gap:18px}.stock-login-submit{font-size:20px}.stock-login-theme{transform:none}}
+
+.driver-login .login-story{background:linear-gradient(145deg,#092d3b,#0d4f5c)}
+.driver-login .login-story-copy em{color:#72dfd5}.driver-login .login-flow>div{border-color:#3d7d86;background:#123f4b}.driver-login .login-form>.eyebrow{color:#167f86}.driver-login .login-form>.btn{background:#087f83;border-color:#087f83}.driver-login .login-assurance{background:#edf8f7;border-color:#d2ece9}
 
 .fleet-card>.fleet-eta{color:#74a096;font-size:7px;margin:0 0 4px;line-height:1.6}
 

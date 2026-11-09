@@ -46,6 +46,9 @@ function assignment(state,trip,drivers){
   return {request,dispatch,truck,stock};
 }
 const expectedQr=trip=>JSON.stringify({v:1,type:'AIMOC_ASSIGNMENT_REFERENCE',requestId:trip.requestId,dispatchId:trip.dispatchId,tripId:trip.id,truckId:trip.truckId});
+// The shared Driver screen now emits one dispatch/truck/driver reference. Quarry
+// accepts that canonical reference without changing its gate authorization rules.
+const driverDispatchQr=trip=>JSON.stringify({v:1,type:'AIMOC_DRIVER_DISPATCH_REFERENCE',dispatchId:trip.dispatchId,truckId:trip.truckId,assignedDriverUserId:trip.assignedDriverUserId});
 export function quarryDispatchPass(trip){
   if(!trip.truckId||!trip.assignedDriverUserId||!trip.dispatchId)return null;
   return {value:JSON.stringify({v:1,type:'AIMOC_QUARRY_DISPATCH_PASS',dispatchId:trip.dispatchId,truckId:trip.truckId,assignedDriverUserId:trip.assignedDriverUserId}),isAuthorization:false,physicalScan:false,scope:'TRUCK_DISPATCH',dispatchId:trip.dispatchId,truckId:trip.truckId,assignedDriverUserId:trip.assignedDriverUserId};
@@ -162,7 +165,7 @@ export function applyQuarryCilegonAction(state,action,payload,actor,options,hook
     return {...prior.scanResult,replayed:true};
   }
   purposeGuard(state,trip,payload.purpose,actor,options);
-  if(payload.truckId!==trip.truckId||![expectedQr(trip),quarryDispatchPass(trip)?.value].includes(payload.qrValue))fail('QR atau truk tidak sesuai ritase dispatch.','QUARRY_QR_MISMATCH');
+  if(payload.truckId!==trip.truckId||![expectedQr(trip),driverDispatchQr(trip),quarryDispatchPass(trip)?.value].includes(payload.qrValue))fail('QR atau truk tidak sesuai ritase dispatch.','QUARRY_QR_MISMATCH');
   const config=quarryCilegonConfig(state),lane=config.lanes.find(l=>l.id===payload.laneId);
   if(!lane||!lane.active||!['BIDIRECTIONAL',payload.direction].includes(lane.direction))fail('Jalur tidak aktif atau arah tidak sesuai.','QUARRY_LANE_UNAVAILABLE');
   if(payload.direction!==(payload.purpose==='EXIT'?'OUT':'IN'))fail('Arah scan tidak sesuai tindakan ritase.','QUARRY_DIRECTION_MISMATCH');

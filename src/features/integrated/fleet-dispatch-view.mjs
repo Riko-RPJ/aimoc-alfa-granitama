@@ -86,3 +86,24 @@ export function buildDispatchGroups(trips, dispatches, {dispatchId = 'all'} = {}
   const allGroups = [...groupsById.values()];
   return {groups: allGroups.filter(group => dispatchId === 'all' || group.dispatchId === dispatchId), options: allGroups.map(group => ({id: group.dispatchId, code: group.code, count: group.trips.length}))};
 }
+
+/** One summary row per truck; waiting loads remain visible as separate unassigned rows. */
+export function buildDispatchTruckRows(trips) {
+  const groups = new Map();
+  for (const trip of list(trips)) {
+    const key = trip.truckId || `__waiting_${trip.id}`;
+    if (!groups.has(key)) groups.set(key, {truckId: trip.truckId || null, trips: []});
+    groups.get(key).trips.push(trip);
+  }
+  return [...groups.values()].map(group => {
+    group.trips.sort((a,b)=>(Number(a.sequence)||0)-(Number(b.sequence)||0));
+    const completed=group.trips.filter(trip=>terminal.has(trip.status)).length;
+    const current=group.trips.find(trip=>!terminal.has(trip.status))||group.trips.at(-1);
+    return {...group,current,completed,total:group.trips.length,progress:Math.min(group.trips.length,completed+(completed<group.trips.length?1:0))};
+  });
+}
+
+export const paginateDispatchTruckRows=(rows,page=1,pageSize=5)=>{
+  const total=list(rows).length,count=Math.max(1,Math.ceil(total/pageSize)),current=Math.min(count,Math.max(1,Number.isSafeInteger(page)?page:1));
+  return {rows:list(rows).slice((current-1)*pageSize,current*pageSize),page:current,pageCount:count,total};
+};

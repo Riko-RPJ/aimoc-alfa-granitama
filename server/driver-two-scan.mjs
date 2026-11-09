@@ -124,6 +124,16 @@ function outbox(state,type,trip,at){
  state.erpOutbox.push({id:id('erp'),createdAt:at,type,entityId:trip.id,status:'awaiting_configuration',system:'oracle_netsuite',source:SOURCE,synthetic:true,payload:{tripId:trip.id,tripCode:trip.code,requestId:trip.requestId,dispatchId:trip.dispatchId,skuId:trip.skuId,volumeM3:trip.volumeM3,tonnageT:trip.tonnageT,sourceStockpileId:trip.stockpileId,destinationStockpileId:trip.destinationStockpileId||null,jettyId:trip.jettyId,vesselId:trip.vesselId,receiptCode:trip.receiptCode,quantitySource:BASIS,measurementPending:true,confirmationSource:'DRIVER_TWO_SCAN',...location}});
 }
 
+function continueSerialDispatch(state,trip,actor,at){
+ const next=state.trips.filter(row=>row.dispatchId===trip.dispatchId&&row.truckId===trip.truckId&&row.assignedDriverUserId===trip.assignedDriverUserId&&row.sequence>trip.sequence).sort((a,b)=>a.sequence-b.sequence)[0];
+ if(!next||!pristine(state,next))return null;
+ const scanEventId=id('evt'),tareEventId=id('weigh'),tareT=validQuantity(trip.tareT)?trip.tareT:round(one(state,'trucks',next.truckId).payloadLimitT*.45);
+ Object.assign(next,{driverScanMode:DRIVER_TWO_SCAN_MODE,driverScanOrigin:'DISPATCH_CONTINUATION',driverFirstScannedAt:at,driverFirstScannedBy:actor.id,status:'ready_to_load',startedAt:at,readyToLoadAt:at,quantitySource:BASIS,measurementPending:true,qrScannedAt:at,qrScannedBy:actor.id,qrSource:'DRIVER_DISPATCH_CONTINUATION',qrEventId:scanEventId,qrPhysicalVerified:false,tareT,tareEventId,tareAt:at});
+ next.weighingEvents.push({id:tareEventId,type:'TARE',weightT:tareT,status:'ACCEPTED',at,acceptedAt:at,actorId:actor.id,source:SOURCE,synthetic:true,physicalMeasurementVerified:false,measurementKind:'DUMMY_TARE_DISPATCH_REUSE',sourceTripId:trip.id,sourceTareEventId:trip.tareEventId||null});
+ state.events.push({id:scanEventId,at,actorId:actor.id,role:actor.role,type:'trip.driver_scan',entityId:next.id,expectedStage:1,source:SOURCE,synthetic:true,physicalScanVerified:false,continuation:true,continuationFromTripId:trip.id,quantitySource:BASIS,measurementPending:true,confirmations:null,scanResult:{entityId:next.id,tripId:next.id,source:SOURCE,status:next.status,displayStatus:next.status,acceptedStage:1,driverScanMode:DRIVER_TWO_SCAN_MODE}});
+ return next;
+}
+
 /** Mutates an authorized operation draft only; the caller commits atomically under its row lock. */
 export function applyDriverScan(state,payload,actor,options={}){
  validatePayload(payload);
@@ -135,12 +145,16 @@ export function applyDriverScan(state,payload,actor,options={}){
  const eventFingerprint=fingerprint({action:'trip.driver_scan',payload:{...payload,externalEventId:undefined}});
  const prior=state.events.find(event=>event.source===SOURCE&&event.externalEventId===payload.externalEventId);
  if(prior){if(prior.type!=='trip.driver_scan'||prior.entityId!==trip.id||prior.actorId!==actor.id||prior.eventFingerprint!==eventFingerprint)fail('ID event scan telah digunakan dengan isi berbeda.','EVENT_CONFLICT');return {...prior.scanResult,replayed:true};}
- const {progress,stock,target,vessel,returnOnly}=assertReady(state,trip,actor,options,payload.expectedStage),at=stamp(),eventId=id('evt');
+ const {progress,truck,stock,target,vessel,returnOnly}=assertReady(state,trip,actor,options,payload.expectedStage),at=stamp(),eventId=id('evt');
  if(payload.expectedStage===1){
   Object.assign(trip,{driverScanMode:DRIVER_TWO_SCAN_MODE,driverScanOrigin:progress.origin==='QUEUED_PENDING_TARE'?'QUEUED_PENDING_TARE':'DRIVER_FIRST_SCAN',driverFirstScannedAt:at,driverFirstScannedBy:actor.id,status:'ready_to_load',startedAt:at,readyToLoadAt:at,quantitySource:BASIS,measurementPending:true});
   if(progress.origin==='QUEUED_PENDING_TARE'){
    const pending=weights(trip)[0];pending.status='ACCEPTED';pending.acceptedAt=at;
    Object.assign(trip,{tareT:pending.weightT,tareEventId:pending.id,tareAt:at});
+  }else{
+   const tareT=round(truck.payloadLimitT*.45),tareEventId=id('weigh');
+   trip.weighingEvents.push({id:tareEventId,type:'TARE',weightT:tareT,status:'ACCEPTED',at,acceptedAt:at,actorId:actor.id,source:SOURCE,synthetic:true,physicalMeasurementVerified:false,measurementKind:'DUMMY_TARE_AFTER_DRIVER_SCAN'});
+   Object.assign(trip,{tareT,tareEventId,tareAt:at});
   }
   if(!trip.qrScannedAt)Object.assign(trip,{qrScannedAt:at,qrScannedBy:actor.id,qrSource:'DRIVER_TWO_SCAN_CONFIRMATION',qrEventId:eventId,qrPhysicalVerified:false});
  }else if(returnOnly){
@@ -158,7 +172,7 @@ export function applyDriverScan(state,payload,actor,options={}){
  }
  const result={entityId:trip.id,tripId:trip.id,source:SOURCE,status:trip.status,displayStatus:trip.status==='returned'?'completed':trip.status,acceptedStage:payload.expectedStage,driverScanMode:DRIVER_TWO_SCAN_MODE};
  state.events.push({id:eventId,at,actorId:actor.id,role:actor.role,type:'trip.driver_scan',entityId:trip.id,externalEventId:payload.externalEventId,eventFingerprint,expectedStage:payload.expectedStage,source:SOURCE,synthetic:true,physicalScanVerified:false,quantitySource:returnOnly?trip.quantitySource||SOURCE:BASIS,measurementPending:!returnOnly,confirmations:payload.confirmations?{...payload.confirmations}:null,scanResult:result});
- if(payload.expectedStage===2)scheduleAutomaticDispatch(state,options,actor);
+ if(payload.expectedStage===2){if(!returnOnly)continueSerialDispatch(state,trip,actor,at);scheduleAutomaticDispatch(state,options,actor);}
  refreshAutomaticDispatchProgress(state);
  return result;
 }

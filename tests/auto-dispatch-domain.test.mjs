@@ -81,6 +81,17 @@ test('waiting cargo can reserve stock without any free Driver; allocator resumes
  const allocated=allocateAutomaticDispatch(s,opts,admin);assert.equal(allocated.assignedTripIds.length,s.trips.length);assert.equal(new Set(s.trips.map(t=>t.truckId)).size,2);assert.ok(s.trips.every(t=>t.status==='queued'));unique(s);
 });
 
+test('an unstarted truck assignment with no active Driver is released and reassigned when a Driver becomes free',()=>{
+ const s=fixture(),requestId=request(s,30);act(s,'request.plan',{requestId});
+ const orphan=s.trips.find(t=>t.truckId==='truck-1'),previousTruckId=orphan.truckId;
+ Object.assign(orphan,{assignedDriverUserId:null,assignedDriverName:null});
+ const before=structuredClone(s);assert.throws(()=>act(s,'driver.assignment.refresh',{},admin),error=>error.code==='FORBIDDEN');assert.deepEqual(s,before);
+ const result=act(s,'driver.assignment.refresh',{},drivers[0]),current=s.trips.find(t=>t.id===orphan.id);
+ assert.ok(result.assignedTripIds.includes(orphan.id));assert.ok(current.truckId&&current.assignedDriverUserId);
+ assert.equal(current.assignmentHistory.at(-1).truckId,previousTruckId);assert.equal(current.assignmentHistory.at(-1).assignedDriverUserId,null);assert.equal(current.assignmentHistory.at(-1).reason,'Incomplete inactive assignment released for automatic reassignment');
+ assert.ok(s.events.some(event=>event.type==='trip.incomplete_assignment_released'&&event.entityId===orphan.id));unique(s);
+});
+
 test('manual assignment is rejected and insufficient shared SKU stock rolls the whole plan back',()=>{
  const s=fixture(),id=request(s,150);const before=structuredClone(s);
  assert.throws(()=>act(s,'request.plan',{requestId:id,assignments:[]}),e=>e.code==='MANUAL_ASSIGNMENT_NOT_ALLOWED'&&e.status===400);assert.deepEqual(s,before);

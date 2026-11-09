@@ -123,7 +123,7 @@ test('new LAND location automatically receives real trip inventory into its own 
   assert.ok(Math.abs(final.document.stockpiles.reduce((sum,x)=>sum+x.onHandM3,0)-before.document.stockpiles.reduce((sum,x)=>sum+x.onHandM3,0))<0.00002);
 });
 
-test('later SKU is provisioned only by a valid LAND write without inventing source stock or retaining failed drafts',async t=>{
+test('later SKU without source stock cannot create a LAND request or retain provisioned drafts',async t=>{
  const {call,ok,action,state}=await fixture(t);
  const created=await ok('master.stockpileLocation.save',location('Future SKU destination',['LAND']));
  const loc=created.state.stockpileLocations.find(x=>x.id===created.result.locationId);
@@ -137,18 +137,11 @@ test('later SKU is provisioned only by a valid LAND write without inventing sour
  const invalid=await action('request.create',{transferMode:'LAND',destinationLocationId:loc.id,lines:[{skuId:invalidSkuId,quantity:-1,unit:'t'}]});
  assert.equal(invalid.status,400,JSON.stringify(invalid.body));
  assert.deepEqual(await state(),before,'A later-SKU receiving row allocated on an invalid write is rolled back with the whole draft');
- const requested=await ok('request.create',{transferMode:'LAND',destinationLocationId:loc.id,lines:[{skuId,quantity:10,unit:'t'}]});
- const added=requested.state.stockpiles.filter(x=>x.skuId===skuId);
- assert.equal(added.length,1);assert.equal(added[0].crusherId,loc.receivingCrusherId);
- assert.equal(added[0].onHandM3,0);assert.equal(added[0].reservedM3,0);assert.equal(added[0].active,true);
- assert.equal(requested.state.crushers.find(x=>x.id===loc.receivingCrusherId).sourceEligible,false);
- assert.ok(!requested.state.stockpiles.some(x=>x.skuId===invalidSkuId));
- const afterRequest=await state();
+ const requested=await action('request.create',{transferMode:'LAND',destinationLocationId:loc.id,lines:[{skuId,quantity:10,unit:'t'}]});
+ assert.equal(requested.status,409);assert.equal(requested.body.error,'MATERIAL_UNAVAILABLE');
+ const afterRequest=await state();assert.deepEqual(afterRequest,before);
  const summary=await call('/api/v1/demo/sku-stock?transferMode=MARINE');assert.equal(summary.status,200);
- const totals=summary.body.items.find(x=>x.skuId===skuId);
+ const totals=summary.body.items.find(x=>x.skuId===skuId);assert.equal(totals.sourceEligibleAvailableTonnes,0);
  assert.equal(totals.physicalM3,0);assert.equal(totals.sourceEligibleAvailableM3,0);
  assert.deepEqual(await state(),afterRequest,'Reading totals never provisions further receiving rows');
- const rejectedPlan=await action('request.plan',{requestId:requested.result.requestId});
- assert.equal(rejectedPlan.status,409,JSON.stringify(rejectedPlan.body));assert.equal(rejectedPlan.body.error,'INSUFFICIENT_STOCK');
- assert.deepEqual(await state(),afterRequest,'An empty receiver cannot fabricate dispatch source inventory');
 });

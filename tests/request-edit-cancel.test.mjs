@@ -81,6 +81,13 @@ test('invalid SKU, units, amounts, destination, vessel and managed fields fail a
  f.state.products.find(row=>row.id==='split-12').active=false;rejectsAtomic(f,()=>f.update(),'VALIDATION');
 });
 
+test('create and edit reject a SKU with no dispatchable source stock',()=>{
+ const f=fixture();
+ for(const pile of f.state.stockpiles.filter(row=>row.skuId==='split-12'))pile.reservedM3=pile.onHandM3;
+ rejectsAtomic(f,()=>f.act('request.create',definition()),'MATERIAL_UNAVAILABLE');
+ rejectsAtomic(f,()=>f.update(),'MATERIAL_UNAVAILABLE');
+});
+
 test('cancel retains a soft audit record, forbids edit/replan and remains cancelled after unrelated progress aggregation',()=>{
  const f=fixture(),before=physical(f.state),id=f.get().id,code=f.get().code;
  f.act('request.cancel',{requestId:id,expectedRequestRevision:1,reason:'  Wrong destination  '});

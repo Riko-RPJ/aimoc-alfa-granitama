@@ -24,9 +24,9 @@ export function InventorySummary({stockpiles,products,inventoryVisible=true,L=de
    {!skuRows.length?<tr><td colSpan={5}><div className="ig-empty">{L('Belum ada SKU dalam cakupan akun ini.','No SKUs in this account’s scope.')}</div></td></tr>:skuRows.map(row=><tr key={row.skuId} data-sku-id={row.skuId} data-on-hand-m3={row.physicalM3??undefined} data-physical-tonnes={row.physicalTonnes??undefined} data-reserved-m3={row.reservedM3??undefined} data-available-m3={row.availableM3??undefined}>
     <td><b>{row.skuCode||L('SKU belum ditentukan','SKU not assigned')}</b><small>{row.name||(!row.knownSku?L('SKU belum terdaftar','Unregistered SKU'):'—')}</small>{row.issues.length>0&&<span className="inventory-summary-row-warning">{row.issues.includes('BALANCE_RESTRICTED')?L('Saldo dibatasi hak akses','Permission-restricted balances'):row.issues.includes('BALANCE_UNAVAILABLE')?L('Saldo belum tersedia','Balance unavailable'):row.issues.includes('DENSITY_UNAVAILABLE')?L('Berat jenis belum valid','Density unavailable'):L('Perlu pemeriksaan data','Data needs review')}</span>}</td>
     <td><b>{row.physicalM3===null?'—':row.withStockCount} / {row.stockpileCount??'—'}</b><small>{row.densityTPerM3!==null?`${number(row.densityTPerM3)} t/m³`:L('Tonase belum dapat dihitung','Tonnage cannot be calculated')}</small></td>
-    <td><b>{number(row.physicalM3)} m³</b><small>{number(row.physicalTonnes)} t</small></td>
-    <td><b>{number(row.reservedM3)} m³</b><small>{number(row.reservedTonnes)} t</small></td>
-    <td><b>{number(row.availableM3)} m³</b><small>{number(row.availableTonnes)} t</small></td>
+    <td><b>{number(row.physicalTonnes)} t</b><small>{number(row.physicalM3)} m³</small></td>
+    <td><b>{number(row.reservedTonnes)} t</b><small>{number(row.reservedM3)} m³</small></td>
+    <td><b>{number(row.availableTonnes)} t</b><small>{number(row.availableM3)} m³</small></td>
    </tr>)}
   </tbody></table></div>
   <p className="inventory-summary-footnote">{L('Ringkasan mengikuti saldo tercatat dalam cakupan akun, termasuk stockpile nonaktif. Hasil pengukuran yang belum disetujui tidak ditambahkan ke stok. Saldo yang dibatasi hak akses ditampilkan —.','The summary follows recorded balances within this account’s scope, including inactive stockpiles. Unapproved measurements are not added to stock. Permission-restricted balances show —.')}</p>

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {fixture,business,trip} from './driver-two-scan-http-fixture.mjs';
 
-const noPhysicalWeights=t=>{assert.deepEqual(t.weighingEvents,[]);for(const key of ['tareT','grossT','netT','actualNetT','actualVolumeM3','tareEventId','grossEventId'])assert.equal(Object.hasOwn(t,key),false,'No fabricated physical field '+key);};
+const dummyTareOnly=t=>{assert.equal(t.weighingEvents.length,1);assert.equal(t.weighingEvents[0].type,'TARE');assert.equal(t.weighingEvents[0].measurementKind,'DUMMY_TARE_AFTER_DRIVER_SCAN');assert.equal(t.weighingEvents[0].synthetic,true);assert.equal(t.weighingEvents[0].physicalMeasurementVerified,false);assert.equal(t.tareT,t.weighingEvents[0].weightT);for(const key of ['grossT','netT','actualNetT','actualVolumeM3','grossEventId'])assert.equal(Object.hasOwn(t,key),false,'No fabricated physical field '+key);};
 const inventory=document=>({stockpiles:document.stockpiles,vessels:document.vessels,ledger:document.inventoryLedger,erp:document.erpOutbox});
 const reject=async(response,label)=>{assert.ok([400,403,404,409].includes(response.status),label+': '+JSON.stringify(response.body));};
 
@@ -15,7 +15,7 @@ test('real HTTP two-scan serial flow commits planned receipt and verified return
  const outOfOrder=await f.action('trip.driver_scan',f.payload(second.id,1,laterWire),'qa-driver-a');await reject(outOfOrder,'Later serial trip cannot scan before current return');assert.deepEqual(await f.state(),initial);
  const p1=f.payload(first.id,1,wire),request1=randomUUID();
  const firstScan=await f.action('trip.driver_scan',p1,'qa-driver-a',{requestId:request1,expectedRevision:Number(initial.revision)});assert.equal(firstScan.status,200,JSON.stringify(firstScan.body));
- let after=await f.state();assert.equal(trip(after.document,first.id).status,'ready_to_load');assert.equal(trip(after.document,second.id).status,'queued');noPhysicalWeights(trip(after.document,first.id));assert.deepEqual(inventory(after.document),inventory(initial.document),'Scan1 cannot move stock, reserve a vessel receipt or post ERP');
+ let after=await f.state();assert.equal(trip(after.document,first.id).status,'ready_to_load');assert.equal(trip(after.document,second.id).status,'queued');dummyTareOnly(trip(after.document,first.id));assert.deepEqual(inventory(after.document),inventory(initial.document),'Scan1 cannot move stock, reserve a vessel receipt or post ERP');
  const retry=await f.action('trip.driver_scan',p1,'qa-driver-a',{requestId:request1,expectedRevision:Number(initial.revision)});assert.equal(retry.status,200);assert.equal(retry.body.replayed,true);assert.deepEqual(await f.state(),after,'Lost response retry uses the same request receipt before stale revision checks');
  const sameIntent=await f.action('trip.driver_scan',p1,'qa-driver-a');assert.equal(sameIntent.status,200);assert.ok(sameIntent.body.result?.replayed||sameIntent.body.replayed);assert.deepEqual(await f.state(),after,'A stable external intent replay changes neither operation revision nor timestamp');
  const otherFirstIntent=await f.action('trip.driver_scan',f.payload(first.id,1,wire),'qa-driver-a');await reject(otherFirstIntent,'A second Scan1 intent never becomes Scan2');
@@ -24,7 +24,7 @@ test('real HTTP two-scan serial flow commits planned receipt and verified return
  await reject(await f.action('trip.driver_scan',stage2,'qa-driver-b'),'Other Driver cannot finish this trip');assert.deepEqual(await f.state(),after);
  await reject(await f.action('trip.driver_scan',stage2,'admin'),'Admin cannot impersonate Driver intent');assert.deepEqual(await f.state(),after);
  const key2=randomUUID(),duplicates=await Promise.all([f.action('trip.driver_scan',stage2,'qa-driver-a',{requestId:key2}),f.action('trip.driver_scan',stage2,'qa-driver-a',{requestId:key2})]);assert.ok(duplicates.every(x=>x.status===200));assert.equal(duplicates.filter(x=>x.body.replayed).length,1);
- after=await f.state();const completed=trip(after.document,first.id);assert.equal(completed.status,'returned');assert.ok(completed.receivedAt&&completed.returnedAt&&completed.receiptCode);assert.equal(completed.returnVerifiedBy,f.driverAId);noPhysicalWeights(completed);
+ after=await f.state();const completed=trip(after.document,first.id);assert.equal(completed.status,'returned');assert.ok(completed.receivedAt&&completed.returnedAt&&completed.receiptCode);assert.equal(completed.returnVerifiedBy,f.driverAId);dummyTareOnly(completed);
  const sourceBefore=initial.document.stockpiles.find(x=>x.id===first.stockpileId),sourceAfter=after.document.stockpiles.find(x=>x.id===first.stockpileId);assert.ok(Math.abs(sourceBefore.onHandM3-sourceAfter.onHandM3-first.volumeM3)<0.000002);assert.ok(Math.abs(sourceBefore.reservedM3-sourceAfter.reservedM3-first.volumeM3)<0.000002);
  const vesselBefore=initial.document.vessels.find(x=>x.id===first.vesselId),vesselAfter=after.document.vessels.find(x=>x.id===first.vesselId);assert.equal(vesselAfter.loadedT-vesselBefore.loadedT,first.tonnageT);assert.equal(vesselBefore.reservedT-vesselAfter.reservedT,first.tonnageT);
  assert.equal(after.document.inventoryLedger.filter(x=>x.referenceId===first.id).length,2);assert.equal(after.document.erpOutbox.filter(x=>x.entityId===first.id).length,2);
@@ -34,7 +34,7 @@ test('real HTTP two-scan serial flow commits planned receipt and verified return
  assert.ok(after.document.trips.some(x=>x.requestId===f.requestB&&x.status==='waiting_truck'),'Truck stays bound to the current dispatch until all serial work returns');
  const finishedSnapshot=business(after.document);const replayEvent=await f.action('trip.driver_scan',stage2,'qa-driver-a');assert.equal(replayEvent.status,200);assert.deepEqual(business((await f.state()).document),finishedSnapshot);
  await reject(await f.action('trip.driver_scan',f.payload(first.id,2,wire),'qa-driver-a'),'A new Scan2 cannot repeat a finished receipt');
- const secondWire=await f.assignment(second.id);await f.ok('trip.driver_scan',f.payload(second.id,1,secondWire),'qa-driver-a');await f.ok('trip.driver_scan',f.payload(second.id,2,secondWire),'qa-driver-a');
+ const secondWire=await f.assignment(second.id);assert.equal(secondWire.trip.driverScan.nextStage,2);assert.equal(secondWire.loadDetails.scanNumber,1);assert.equal(trip((await f.state()).document,second.id).driverScanOrigin,'DISPATCH_CONTINUATION');await f.ok('trip.driver_scan',f.payload(second.id,2,secondWire),'qa-driver-a');
  after=await f.state();assert.equal(after.document.requests.find(x=>x.id===f.requestA).status,'completed');const waiting=after.document.trips.find(x=>x.requestId===f.requestB);assert.equal(waiting.status,'queued');assert.equal(waiting.assignedDriverUserId,f.driverAId);
  const counters=(await f.call('/api/v1/demo/context','GET',undefined,'qa-driver-a')).body.state.driverDailySummary;assert.equal(counters.completedTrips,2);assert.equal(counters.unfinishedTrips,1);assert.equal(counters.includeCarryover,true);
  const waitingWire=await f.assignment(waiting.id);await f.ok('trip.driver_scan',f.payload(waiting.id,1,waitingWire),'qa-driver-a');await f.ok('trip.driver_scan',f.payload(waiting.id,2,waitingWire),'qa-driver-a');
@@ -67,7 +67,7 @@ test('LAND receipt conserves stock and invalid destination or reservation failur
  await f.db.query('UPDATE aimoc_alfa_ops.operation SET document=$1::jsonb WHERE id=1',[JSON.stringify(tinyDeficit)]);const beforeTiny=await f.state();
  await reject(await f.action('trip.driver_scan',p,'qa-driver-a',{requestId}),'Even a deficit below comparison tolerance cannot create negative rounded stock');assert.deepEqual(await f.state(),beforeTiny);
  await f.db.query('UPDATE aimoc_alfa_ops.operation SET document=$1::jsonb WHERE id=1',[JSON.stringify(ready.document)]);await f.ok('trip.driver_scan',p,'qa-driver-a',{requestId});const after=await f.state();
- const total=document=>document.stockpiles.reduce((sum,x)=>sum+x.onHandM3,0);assert.ok(Math.abs(total(after.document)-total(ready.document))<0.000002);assert.equal(after.document.stockpiles.find(x=>x.id===first.destinationStockpileId).onHandM3,first.volumeM3);assert.deepEqual(after.document.vessels,ready.document.vessels);assert.equal(trip(after.document,first.id).status,'returned');noPhysicalWeights(trip(after.document,first.id));
+ const total=document=>document.stockpiles.reduce((sum,x)=>sum+x.onHandM3,0);assert.ok(Math.abs(total(after.document)-total(ready.document))<0.000002);assert.equal(after.document.stockpiles.find(x=>x.id===first.destinationStockpileId).onHandM3,first.volumeM3);assert.deepEqual(after.document.vessels,ready.document.vessels);assert.equal(trip(after.document,first.id).status,'returned');dummyTareOnly(trip(after.document,first.id));
 });
 
 for(const stage of ['unloaded','returning'])test('legacy '+stage+' Scan2 verifies return only, preserving all accepted weighing and custody bytes',async t=>{

@@ -79,6 +79,12 @@ test('authenticated multioperator API preserves shared operational state',async 
   await t.test('only admin manages scoped users and passwords are never returned',async()=>{
    assert.equal((await call('/api/users','GET',undefined,stock)).status,403);
    const created=await call('/api/users','POST',{username:'operator-new',displayName:'New',role:'stock',crusherIds:['crusher-1'],password},admin);assert.equal(created.status,201);assert.equal(created.body.user.password,undefined);assert.equal(created.body.user.password_hash,undefined);
+   const edited=await call('/api/users/'+created.body.user.id,'PATCH',{username:'operator-edited',displayName:'Operator Edited',role:'stock',crusherIds:['crusher-2'],jettyIds:[],active:true,password:''},admin);assert.equal(edited.status,200);assert.equal(edited.body.user.username,'operator-edited');assert.deepEqual(edited.body.user.crusherIds,['crusher-2']);assert.equal(edited.body.user.password_hash,undefined);
+   assert.equal((await call('/api/users/'+created.body.user.id,'PATCH',{username:'operator-edited',displayName:'Operator Edited',role:'stock',crusherIds:['crusher-2'],active:true},stock)).status,403);
+   const listed=await call('/api/users','GET',undefined,admin),adminUser=listed.body.users.find(user=>user.username==='admin'),assignedDriver=listed.body.users.find(user=>user.role==='driver'&&trip.assignedDriverUserId===user.id);
+   assert.equal((await call('/api/users/'+adminUser.id,'DELETE',undefined,admin)).status,409);
+   if(assignedDriver)assert.equal((await call('/api/users/'+assignedDriver.id,'DELETE',undefined,admin)).status,409);
+   assert.equal((await call('/api/users/'+created.body.user.id,'DELETE',undefined,admin)).status,200);assert.equal((await call('/api/users','GET',undefined,admin)).body.users.some(user=>user.id===created.body.user.id),false);
    assert.equal((await call('/api/users','POST',{username:'bad',displayName:'Bad',role:'stock',password},admin)).status,400);
    const result=await call('/api/logout','POST',{},stock);assert.equal(result.status,200);assert.equal((await call('/api/me','GET',undefined,stock)).status,401);
   });

@@ -12,6 +12,7 @@ import {resolveStockpileDestination,guardReceivingCrusherMutation} from './stock
 
 const fail=(status,code,message)=>{throw Object.assign(new Error(message),{status,code});};
 const validId=x=>typeof x==='string'&&/^[\w-]{1,100}$/.test(x);
+const containsExactValue=(value,target)=>value===target||Array.isArray(value)&&value.some(item=>containsExactValue(item,target))||Boolean(value&&typeof value==='object'&&Object.values(value).some(item=>containsExactValue(item,target)));
 const stockpileDestinationFields=record=>Object.fromEntries(['destinationLocationId','destinationLocationCode','destinationLocationName','destinationLocationSnapshot'].filter(key=>Object.hasOwn(record,key)).map(key=>[key,structuredClone(record[key])]));
 const parseBody=async req=>{
   if(req.body&&typeof req.body==='object'&&!Buffer.isBuffer(req.body)) {if(Buffer.byteLength(JSON.stringify(req.body))>3000000)fail(413,'PAYLOAD_TOO_LARGE','Berkas terlalu besar.');return req.body;}
@@ -306,7 +307,7 @@ export function createHandler(db,{secure=false}={}) {
               if(!evidence||evidence.actor_id!==actor.id)fail(403,'EVIDENCE_ACCESS','Pengukuran hanya dapat memakai bukti unggahan operator sendiri.');
               payload.evidenceName=evidence.filename;
             }
-            if(payload.method==='camera_pending'&&!payload.evidenceId)fail(400,'EVIDENCE_REQUIRED','Unggah foto sebelum menyimpan bukti kamera.');
+            if(actor.role==='stock'&&!payload.evidenceId)fail(400,'EVIDENCE_REQUIRED','Unggah evidence foto sebelum mengirim pengajuan.');
           }
           const state=structuredClone(locked.document);
           await guardLocationOperatorReferences(c,state,body.action,payload);
@@ -333,6 +334,37 @@ export function createHandler(db,{secure=false}={}) {
           await c.query('INSERT INTO aimoc_alfa_ops.actions(actor_id,request_id,payload_hash,result) VALUES($1,$2,$3,$4::jsonb)',[actor.id,body.requestId,payloadHash,JSON.stringify(actionResult)]);
           return {...await view(c),result:actionResult};
         });return send(200,result);
+      }
+      if(path.startsWith('/api/users/')){
+        if(actor.role!=='admin')fail(403,'ROLE_REQUIRED','Hanya Admin AIMOC.');
+        let id;try{id=decodeURIComponent(path.slice('/api/users/'.length));}catch{fail(400,'INVALID_USER','Akun tidak valid.');}if(!validId(id))fail(400,'INVALID_USER','Akun tidak valid.');
+        const existing=(await db.query('SELECT * FROM aimoc_alfa_ops.users WHERE id=$1',[id])).rows[0];if(!existing)fail(404,'USER_NOT_FOUND','Akun tidak ditemukan.');
+        if(method==='PATCH'){
+          const b=await parseBody(req),username=String(b.username||'').trim().toLowerCase().replace(/@aimoc\.local$/,'');
+          if(!/^[a-z0-9._-]{3,60}$/.test(username)||!['admin','stock','jetty','driver'].includes(b.role)||!b.displayName?.trim())fail(400,'INVALID_USER','Lengkapi username, nama, dan peran.');
+          const crusherIds=Array.isArray(b.crusherIds)?b.crusherIds.filter(validId):[],jettyIds=Array.isArray(b.jettyIds)?b.jettyIds.filter(validId):[];
+          if((b.role==='stock'&&!crusherIds.length)||(b.role==='jetty'&&!jettyIds.length))fail(400,'USER_SCOPE','Tentukan lokasi operator.');
+          if(id===actor.id&&(b.role!=='admin'||b.active===false))fail(409,'SELF_ACCOUNT_PROTECTED','Akun Admin yang sedang digunakan tidak dapat dinonaktifkan atau diubah perannya.');
+          const encoded=b.password?await passwordHash(b.password):null;
+          const row=await db.transaction(async c=>{
+            const locked=(await c.query('SELECT document FROM aimoc_alfa_ops.operation WHERE id=1 FOR UPDATE')).rows[0],document=locked.document;
+            if(crusherIds.some(areaId=>!document.crushers.some(area=>area.id===areaId&&area.active))||jettyIds.some(jettyId=>!document.jetties.some(jetty=>jetty.id===jettyId&&jetty.active)))fail(400,'USER_SCOPE','Lokasi operator tidak terdaftar atau tidak aktif.');
+            if((b.role!=='driver'||b.active===false)&&document.trips.some(trip=>trip.assignedDriverUserId===id&&!['returned','cancelled'].includes(trip.status)))fail(409,'USER_IN_USE','Akun Driver masih memiliki ritase aktif.');
+            const updated=(await c.query(`UPDATE aimoc_alfa_ops.users SET username=$1,display_name=$2,role=$3,crusher_ids=$4,jetty_ids=$5,active=$6,password_hash=COALESCE($7,password_hash) WHERE id=$8 RETURNING *`,[username,b.displayName.trim().slice(0,100),b.role,crusherIds,jettyIds,b.active!==false,encoded,id])).rows[0];
+            if(b.role==='driver'&&b.active!==false&&document.trips.some(trip=>trip.status==='waiting_truck')){
+              const state=structuredClone(document),drivers=(await c.query("SELECT id,username,display_name,role,active FROM aimoc_alfa_ops.users WHERE role='driver' AND active=true ORDER BY username")).rows.map(userView);
+              allocateAutomaticDispatch(state,{drivers},actor);await c.query('UPDATE aimoc_alfa_ops.operation SET document=$1::jsonb,revision=revision+1,updated_at=now() WHERE id=1',[JSON.stringify(state)]);
+            }
+            return updated;
+          });
+          return send(200,{user:userView(row)});
+        }
+        if(method==='DELETE'){
+          if(id===actor.id)fail(409,'SELF_ACCOUNT_PROTECTED','Akun Admin yang sedang digunakan tidak dapat dihapus.');
+          await db.transaction(async c=>{const document=(await c.query('SELECT document FROM aimoc_alfa_ops.operation WHERE id=1 FOR UPDATE')).rows[0].document;if(containsExactValue(document,id))fail(409,'USER_IN_USE','Akun sudah digunakan pada data operasional dan tidak dapat dihapus. Nonaktifkan akun sebagai gantinya.');await c.query('DELETE FROM aimoc_alfa_ops.sessions WHERE user_id=$1',[id]);await c.query('DELETE FROM aimoc_alfa_ops.users WHERE id=$1',[id]);});
+          return send(200,{deletedId:id});
+        }
+        fail(405,'METHOD_NOT_ALLOWED','Gunakan PATCH atau DELETE.');
       }
       if(path==='/api/users'){
         if(actor.role!=='admin')fail(403,'ROLE_REQUIRED','Hanya Admin AIMOC.');

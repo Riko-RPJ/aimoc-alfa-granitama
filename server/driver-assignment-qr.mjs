@@ -52,5 +52,28 @@ export function driverAssignmentQr(state,actor,{tripId,drivers=[]}={}){
  const projected=detail.trips.find(row=>row.id===trip.id),projectedDispatch=detail.dispatches.find(row=>row.id===dispatch.id);
  if(!projected||!projectedDispatch||!projected.qr||projected.qr.isAuthorization!==false||projected.qr.physicalScan!==false)unavailable();
  const binding={requestId:request.id,dispatchId:dispatch.id,tripId:trip.id,truckId:truck.id,sourceStockpileId:stock.id,sourceCrusherId:crusher.id,skuId:product.id,assignedDriverUserId:trip.assignedDriverUserId};
- return {source:'INTEGRATED_DEMO',request:header(detail.request),dispatch:header(projectedDispatch),trip:{...projected,driverScan:visible.driverScan,driverScanMode:visible.driverScanMode||null,displayStatus:visible.displayStatus},qr:projected.qr,binding,historical,canOpenTask:false,canOpenTaskDeprecated:true,qrReferenceOnly:true,scanRecorded:false,authorizationGranted:false};
+ const tripIds=dispatch.tripIds.filter(id=>state.trips.some(row=>row.id===id&&row.truckId===truck.id&&row.assignedDriverUserId===trip.assignedDriverUserId));
+ // Scan details are disclosed only after a matching committed backend event.
+ // Timestamp fields alone are insufficient: they can be stale or imported from legacy workflows.
+ const verifiedScanEvents=[1,2].map(stage=>(state.events||[]).filter(event=>
+  event.type==='trip.driver_scan'&&event.source==='INTEGRATED_DEMO'&&event.entityId===trip.id&&
+  event.actorId===trip.assignedDriverUserId&&event.expectedStage===stage&&
+  event.at===(stage===1?trip.driverFirstScannedAt:trip.driverSecondScannedAt)&&
+  event.physicalScanVerified===false&&event.synthetic===true));
+ const scanNumber=verifiedScanEvents[1].length===1?2:verifiedScanEvents[0].length===1?1:0;
+ const quantityEvidence=Number.isFinite(trip.actualNetT)&&trip.actualNetT>0&&trip.grossEventId?'VERIFIED_WEIGHING':'PLANNED_DEMO';
+ const actualT=quantityEvidence==='VERIFIED_WEIGHING'?trip.actualNetT:null;
+ const actualM3=actualT!==null&&Number.isFinite(trip.densityTPerM3)&&trip.densityTPerM3>0?actualT/trip.densityTPerM3:null;
+ const loadDetails=scanNumber===0?null:{
+  scanNumber,tripNumber:tripIds.indexOf(trip.id)+1,tripCount:tripIds.length,
+  truckCode:truck.code,plate:truck.plate,
+  driverName:assignedDriver?.displayName||assignedDriver?.name||assignedDriver?.username||projected.assignedDriver?.displayName||projected.assignedDriver?.name||projected.assignedDriver?.username||null,
+  materialIndex:product.sizeMm,materialCode:product.code,materialName:product.name,
+  stockpileCode:stock.code,crusherCode:crusher.code,
+  tareT:Number.isFinite(trip.tareT)?trip.tareT:null,
+  plannedTonnageT:trip.tonnageT,plannedVolumeM3:trip.volumeM3,
+  actualTonnageT:actualT,actualVolumeM3:actualM3,
+  quantityBasis:quantityEvidence
+ };
+ return {source:'INTEGRATED_DEMO',request:header(detail.request),dispatch:header(projectedDispatch),trip:{...projected,driverScan:visible.driverScan,driverScanMode:visible.driverScanMode||null,displayStatus:visible.displayStatus},qr:projected.qr,qrScope:{dispatchId:dispatch.id,truckId:truck.id,assignedDriverUserId:trip.assignedDriverUserId},binding,loadDetails,historical,canOpenTask:false,canOpenTaskDeprecated:true,qrReferenceOnly:true,scanRecorded:false,authorizationGranted:false};
 }

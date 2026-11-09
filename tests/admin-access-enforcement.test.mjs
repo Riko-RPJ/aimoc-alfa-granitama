@@ -86,9 +86,13 @@ test('real backend capabilities endpoint matches role and rejects forbidden stat
    assert.equal(denied.status,403,action);
   }
   assert.equal(Number((await db.query('SELECT revision FROM aimoc_alfa_ops.operation WHERE id=1')).rows[0].revision),beforeDenied);
-  const crossWrite=await response(stock1.username,'POST','/api/action',{requestId:'cross-location-measurement',action:'measurement.create',payload:{stockpileId:'stock-2-1',method:'manual',volumeM3:700}});
+  // Provide valid, actor-owned evidence so this test reaches authorization checks
+  // instead of failing earlier with EVIDENCE_REQUIRED (400).
+  const evidence=await response(stock1.username,'POST','/api/evidence',{name:'scope-check.png',dataUrl:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='});
+  assert.equal(evidence.status,201);
+  const crossWrite=await response(stock1.username,'POST','/api/action',{requestId:'cross-location-measurement',action:'measurement.create',payload:{stockpileId:'stock-2-1',method:'manual',volumeM3:700,evidenceId:evidence.data.id}});
   assert.equal(crossWrite.status,403);
-  const allowed=await response(stock1.username,'POST','/api/action',{requestId:'own-location-measurement',action:'measurement.create',payload:{stockpileId:'stock-1-1',method:'manual',volumeM3:700}});
+  const allowed=await response(stock1.username,'POST','/api/action',{requestId:'own-location-measurement',action:'measurement.create',payload:{stockpileId:'stock-1-1',method:'manual',volumeM3:700,evidenceId:evidence.data.id}});
   assert.equal(allowed.status,200);
   assert.ok(allowed.data.state.measurements.every(x=>x.crusherId==='crusher-1'));
   const operation=(await db.query('SELECT document FROM aimoc_alfa_ops.operation WHERE id=1')).rows[0].document;

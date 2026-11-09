@@ -18,6 +18,14 @@ test('assignment reference QR is deterministic and changes when a canonical iden
   }
 });
 
+test('dispatch-truck Driver QR is renderable and rejects mismatched or augmented payloads',()=>{
+ const payload={v:1,type:'AIMOC_DRIVER_DISPATCH_REFERENCE',dispatchId:'dispatch-demo-001',truckId:'truck-demo-001',assignedDriverUserId:'driver-demo-001'};
+ const qr=buildAssignmentQr(JSON.stringify(payload));
+ assert.equal(qr.ok,true);
+ assert.ok(qr.path.length>100);
+ for(const changed of [{...payload,assignedDriverUserId:'bad/user'},{...payload,tripId:'trip-leak'},{...payload,dispatchId:null},{...payload,v:2}])assert.equal(buildAssignmentQr(JSON.stringify(changed)).ok,false);
+});
+
 test('QR has a four-module white quiet zone and valid version-sized square geometry',()=>{
   const qr=buildAssignmentQr(reference());
   assert.equal(qr.ok,true);assert.equal(qr.quietZone,4);assert.equal(qr.size,qr.moduleCount+8);

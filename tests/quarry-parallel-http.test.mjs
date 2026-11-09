@@ -39,7 +39,9 @@ test('Alfa stock approval and planning feed four concurrent Cilegon queues; old 
  // These are the same endpoints used by Alfa's Ukur stockpile and approval UI.
  for(const crusherId of ['crusher-1','crusher-2']){
   const stock=initial.document.stockpiles.find(row=>row.crusherId===crusherId&&row.skuId==='split-12'),username=crusherId==='crusher-1'?'stock1':'stock2';
-  const measured=await ok('measurement.create',{stockpileId:stock.id,method:'manual',quantityValue:600,quantityUnit:'m3',notes:'Synthetic parallel UAT survey'},username,{},true);
+  const evidence=await call('/api/evidence','POST',{name:'synthetic-parallel-survey.png',dataUrl:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='},username);
+  assert.equal(evidence.status,201,JSON.stringify(evidence.body));
+  const measured=await ok('measurement.create',{stockpileId:stock.id,method:'manual',quantityValue:600,quantityUnit:'m3',notes:'Synthetic parallel UAT survey',evidenceId:evidence.body.id},username,{},true);
   assert.equal((await stored()).document.stockpiles.find(row=>row.id===stock.id).onHandM3,0,'Submitted survey is not inventory until Admin approval');
   const measurementId=measured.result.entityId,before=await snapshot();
   assert.equal((await send('measurement.approve',{measurementId},username,{},true)).status,403);assert.deepEqual(await snapshot(),before);

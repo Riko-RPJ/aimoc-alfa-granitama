@@ -11,3 +11,5 @@ coverage/
 *.key
 *.p12
 *.pfx
+
+.DS_Store

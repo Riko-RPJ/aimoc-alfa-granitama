@@ -27,7 +27,9 @@ export function hasAssignmentQr(reference){
  if(!reference?.dispatch||!trip||waiting.has(trip.status)||!validId(trip.id)||!validId(trip.requestId)||!validId(trip.dispatchId)||!validId(trip.truckId)||!validId(trip.assignedDriverUserId)||trip.assignedDriver?.id!==trip.assignedDriverUserId||typeof qr?.value!=='string'||qr.isAuthorization!==false||qr.physicalScan!==false)return false;
  try{
   const value=JSON.parse(qr.value);
-  return value?.v===1&&value.type==='AIMOC_ASSIGNMENT_REFERENCE'&&value.requestId===trip.requestId&&value.dispatchId===trip.dispatchId&&value.tripId===trip.id&&value.truckId===trip.truckId;
+  if(value?.v!==1)return false;
+  if(value.type==='AIMOC_ASSIGNMENT_REFERENCE')return value.requestId===trip.requestId&&value.dispatchId===trip.dispatchId&&value.tripId===trip.id&&value.truckId===trip.truckId;
+  return value.type==='AIMOC_DRIVER_DISPATCH_REFERENCE'&&Object.keys(value).length===5&&value.dispatchId===trip.dispatchId&&value.truckId===trip.truckId&&value.assignedDriverUserId===trip.assignedDriverUserId;
  }catch{return false;}
 }
 

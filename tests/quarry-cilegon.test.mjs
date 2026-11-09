@@ -200,5 +200,5 @@ test('Cilegon actions do not change the existing Alfa Driver two-scan workflow',
  const binding={requestId:legacy.requestId,dispatchId:legacy.dispatchId,tripId:legacy.id,truckId:legacy.truckId,sourceStockpileId:legacy.stockpileId,sourceCrusherId:legacy.crusherId,skuId:legacy.skuId,assignedDriverUserId:legacy.assignedDriverUserId};
  f.act('trip.driver_scan',{tripId:legacy.id,expectedStage:1,externalEventId:randomUUID(),qrValue:f.qr(legacy.id),binding},driver);
  assert.equal(f.lookup(legacy.id).status,'ready_to_load');assert.equal(f.lookup(legacy.id).driverScanMode,'TWO_SCAN_PLANNED_DEMO');
- assert.equal(f.lookup(legacy.id).tareT,undefined);assert.deepEqual(f.lookup(legacy.id).weighingEvents,[]);
+ assert.equal(f.lookup(legacy.id).tareT,18);assert.equal(f.lookup(legacy.id).weighingEvents.length,1);assert.equal(f.lookup(legacy.id).weighingEvents[0].measurementKind,'DUMMY_TARE_AFTER_DRIVER_SCAN');
 });

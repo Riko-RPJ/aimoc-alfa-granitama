@@ -236,7 +236,10 @@ test('automatic cutover marker blocks only the old planner and keeps global migr
  assert.deepEqual((await db.query('SELECT document,revision FROM aimoc_alfa_ops.operation WHERE id=1')).rows[0],before);
  const displayEdit=await call('/api/action','POST',{action:'master.truck.save',payload:{id:'truck-1',plate:'SYNTHETIC DISPLAY EDIT'},requestId:randomUUID()});
  assert.equal(displayEdit.status,200,'Compatibility master maintenance remains available');
- const measurement=await call('/api/action','POST',{action:'measurement.create',payload:{stockpileId:'stock-2-3',method:'manual',volumeM3:100},requestId:randomUUID()},'stock2');
+ // Stockpile submissions require an uploaded image owned by the same operator.
+ const evidence=await call('/api/evidence','POST',{name:'synthetic-cutover-survey.png',dataUrl:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='},'stock2');
+ assert.equal(evidence.status,201,JSON.stringify(evidence.body));
+ const measurement=await call('/api/action','POST',{action:'measurement.create',payload:{stockpileId:'stock-2-3',method:'manual',volumeM3:100,evidenceId:evidence.body.id},requestId:randomUUID()},'stock2');
  assert.equal(measurement.status,200,JSON.stringify(measurement.body));
  assert.equal(measurement.body.state.automaticDispatchUpgrade,undefined,'Legacy mutation responses do not expose global migration IDs');
  const stockRead=await call('/api/state','GET',undefined,'stock2'),jettyRead=await call('/api/state','GET',undefined,'jetty1');

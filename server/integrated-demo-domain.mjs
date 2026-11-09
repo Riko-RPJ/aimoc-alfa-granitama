@@ -92,6 +92,8 @@ function requestDefinition(s,p,actor){
     if(transferMode==='MARINE'&&quantity>1000000)fail('Jumlah transfer tidak valid.');
     const densityTPerM3 = numeric(product.densityTPerM3, 'Berat jenis', true);
     const target=transferMode==='LAND'?destination(s,definition,product.id,line.destinationStockpileId):null;
+    const dispatchableM3=s.stockpiles.filter(stock=>stock.active&&stock.skuId===product.id&&isDispatchSourceArea(row(s,'crushers',stock.crusherId))&&(transferMode==='MARINE'||stock.crusherId!==definition.destinationId)).reduce((total,stock)=>total+Math.max(0,Number(stock.onHandM3)-Number(stock.reservedM3)),0);
+    if(!Number.isFinite(dispatchableM3)||dispatchableM3<=EPS)fail(`Muatan ${product.name} tidak tersedia untuk dispatch.`,'MATERIAL_UNAVAILABLE',409);
     return {skuId: product.id, quantity, unit: line.unit, densityTPerM3, tonnageT: round(line.unit === 't' ? quantity : quantity * densityTPerM3), volumeM3: round(line.unit === 'm3' ? quantity : quantity / densityTPerM3),...(target?{destinationStockpileId:target.id}:{})};
   });
   return definition;
@@ -353,6 +355,10 @@ export function applyIntegratedAction(state, action, payload, actor, options = {
   else if (action === 'request.update') result = updateRequest(draft, payload, actor);
   else if (action === 'request.cancel') result = cancelRequest(draft, payload, actor);
   else if (action === 'request.plan') result = planRequest(draft, payload, actor, options);
+  else if(action==='driver.assignment.refresh'){
+    if(actor.role!=='driver'||Object.keys(payload).length)fail('Hanya Driver aktif yang dapat memperbarui penugasan.','FORBIDDEN',403);
+    result=scheduleAutomaticDispatch(draft,options,actor);
+  }
   else if (action === 'trip.driver_scan') result = applyDriverScan(draft,payload,actor,options);
   else if (typeof action === 'string' && action.startsWith('trip.')) result = moveTrip(draft, action.slice(5), payload, actor, options);
   else fail('Tindakan demo tidak didukung.', 'ACTION_NOT_FOUND', 404);

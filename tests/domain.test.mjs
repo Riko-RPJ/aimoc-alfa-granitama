@@ -26,7 +26,7 @@ test('truck availability follows actual queued, loading, and return milestone in
 });
 test('tonne requests convert via SKU density and reserve exact stock/vessel capacity',()=>{const s=createSeed(),tt=plan(s,180,'t');assert.ok(Math.abs(tt.reduce((a,t)=>a+t.volumeM3,0)-120)<1e-5);assert.equal(s.vessels[0].reservedT,180);assert.equal(s.stockpiles.reduce((a,x)=>a+x.reservedM3,0),120);assert.ok(tt.every(t=>t.volumeM3<=s.trucks.find(x=>x.id===t.truckId).bedM3&&t.tonnageT<=s.trucks.find(x=>x.id===t.truckId).payloadLimitT));});
 test('insufficient fleet capacity creates serial trips sharing one request dispatch',()=>{const s=createSeed();s.trucks=s.trucks.slice(0,2);const tt=plan(s,240);assert.ok(tt.length>2);assert.equal(new Set(tt.map(t=>t.dispatchId)).size,1);assert.equal(s.dispatches.filter(d=>d.requestId===tt[0].requestId).length,1);const first=tt.find(t=>t.truckId===s.trucks[0].id),second=tt.find(t=>t.truckId===first.truckId&&t.id!==first.id);act(s,'trip.start',{tripId:first.id});assert.throws(()=>act(s,'trip.start',{tripId:second.id}),e=>e.code==='TRUCK_BUSY');for(const a of ['depart','arrive','unload'])act(s,`trip.${a}`,movement(first,a));assert.throws(()=>act(s,'trip.start',{tripId:second.id}),e=>e.code==='TRUCK_BUSY');act(s,'trip.return',{tripId:first.id});act(s,'trip.start',{tripId:second.id});assert.equal(second.status,'loading');});
-test('truck queued work is serial and each request has its own shared dispatch ID',()=>{const s=createSeed();s.trucks=s.trucks.slice(0,1);const t1=plan(s,28)[0],t2=plan(s,28)[0];assert.notEqual(t1.dispatchId,t2.dispatchId);assert.equal(s.requests.find(r=>r.id===t1.requestId).dispatchId,t1.dispatchId);assert.throws(()=>act(s,'trip.start',{tripId:t2.id}),e=>e.code==='QUEUE_ORDER');complete(s,t1);act(s,'trip.start',{tripId:t2.id});assert.equal(t2.status,'loading');});
+test('one truck belongs to one unfinished dispatch and becomes reusable only after its final return',()=>{const s=createSeed();s.trucks=s.trucks.slice(0,1);const t1=plan(s,28)[0];assert.equal(s.requests.find(r=>r.id===t1.requestId).dispatchId,t1.dispatchId);const pending=request(s,28);assert.throws(()=>act(s,'request.plan',{requestId:pending}),e=>e.code==='NO_AVAILABLE_TRUCKS');complete(s,t1);act(s,'request.plan',{requestId:pending});const t2=s.trips.find(t=>t.requestId===pending);assert.notEqual(t1.dispatchId,t2.dispatchId);act(s,'trip.start',{tripId:t2.id});assert.equal(t2.status,'loading');});
 test('stock and vessel quantity book only at their respective confirmed transitions',()=>{const s=createSeed(),t=plan(s,28)[0],pile=s.stockpiles.find(x=>x.id===t.stockpileId),before=pile.onHandM3;act(s,'trip.start',{tripId:t.id});assert.equal(pile.onHandM3,before);act(s,'trip.depart',movement(t,'depart'));assert.equal(pile.onHandM3,before-28);assert.equal(s.vessels[0].loadedT,0);assert.equal(publicState(s,admin).metrics.inTransitM3,28);act(s,'trip.arrive',{tripId:t.id});assert.equal(s.vessels[0].loadedT,0);act(s,'trip.unload',{tripId:t.id});assert.equal(s.vessels[0].loadedT,42);assert.equal(s.vessels[0].reservedT,0);assert.equal(publicState(s,admin).metrics.inTransitM3,0);assert.equal(s.requests[0].status,'completed');assert.equal(s.erpOutbox.length,2);assert.ok(s.erpOutbox.every(e=>e.status==='awaiting_configuration'));});
 test('duplicate unload cannot double book receipt or ERP intent',()=>{const s=createSeed(),t=plan(s,28)[0];for(const a of ['start','depart','arrive','unload'])act(s,`trip.${a}`,movement(t,a));const count=s.erpOutbox.length;assert.throws(()=>act(s,'trip.unload',{tripId:t.id}),e=>e.code==='INVALID_TRANSITION');assert.equal(s.vessels[0].loadedT,42);assert.equal(s.erpOutbox.length,count);});
 test('vessel remaining capacity accounts for all outstanding requests',()=>{const s=createSeed();s.vessels[0].payloadLimitT=150;plan(s,80);const id=request(s,40);const before=structuredClone(s);assert.throws(()=>act(s,'request.plan',{requestId:id}),e=>e.code==='VESSEL_CAPACITY');assert.deepEqual(s,before);});
@@ -46,13 +46,21 @@ test('Admin and scoped Stockpile can submit survey measurements; approval remain
 });
 test('Stockpile manual measurement accepts tonnes and server converts with the stock SKU density',()=>{
  const s=createSeed(),pile=s.stockpiles[0],product=s.products.find(x=>x.id===pile.skuId);
- act(s,'measurement.create',{stockpileId:pile.id,skuId:pile.skuId,method:'manual',unit:'t',quantity:150,notes:'Survei timbang'},stock);
+ act(s,'measurement.create',{stockpileId:pile.id,skuId:pile.skuId,method:'manual',quantityUnit:'t',quantityValue:150,notes:'Survei timbang'},stock);
  const measurement=s.measurements[0];
- assert.equal(measurement.measuredUnit,'t');
- assert.equal(measurement.measuredQuantity,150);
+ assert.equal(measurement.quantityUnit,'t');
+ assert.equal(measurement.quantityValue,150);
  assert.equal(measurement.tonnageT,150);
  assert.equal(measurement.volumeM3,Math.round(150/product.densityTPerM3*1e6)/1e6);
- assert.throws(()=>act(s,'measurement.create',{stockpileId:pile.id,method:'manual',unit:'kg',quantity:1},stock),e=>e.code==='UNIT_INVALID');
+ assert.throws(()=>act(s,'measurement.create',{stockpileId:pile.id,method:'manual',quantityUnit:'kg',quantityValue:1},stock),e=>e.code==='INVALID_MEASUREMENT_UNIT');
+});
+test('Admin approval applies a separately selected SKU only after the pending measurement is approved',()=>{
+ const s=createSeed(),pile=s.stockpiles.find(row=>row.id==='stock-1-1'),beforeSku=pile.skuId;
+ const target=s.products.find(product=>product.active&&product.id!==beforeSku);
+ const pending=act(s,'measurement.create',{stockpileId:pile.id,skuId:target.id,method:'manual',quantityValue:25,quantityUnit:'m3'},stock);
+ assert.equal(pile.skuId,beforeSku);assert.equal(s.measurements.find(row=>row.id===pending.entityId).skuId,target.id);
+ act(s,'measurement.approve',{measurementId:pending.entityId},admin);
+ assert.equal(pile.skuId,target.id);assert.equal(pile.onHandM3,25);
 });
 test('pending Stockpile submissions remain scoped and disappear only after Admin approval',()=>{
  const s=createSeed(),pile=s.stockpiles[0],before=pile.onHandM3;

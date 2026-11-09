@@ -163,71 +163,41 @@ export function UserManagement({
   csrf,
   notify
 }) {
-  const [users, setUsers] = useState([]),
-    [loading, setLoading] = useState(true),
-    [adding, setAdding] = useState(false),
-    [busy, setBusy] = useState(false),
-    [error, setError] = useState(''),
-    [form, setForm] = useState({
-      username: '',
-      displayName: '',
-      password: '',
-      role: 'stock',
-      crusherIds: [],
-      jettyIds: []
-    });
+  const empty={username:'',displayName:'',password:'',role:'stock',crusherIds:[],jettyIds:[],active:true};
+  const [users,setUsers]=useState([]),[loading,setLoading]=useState(true),[editor,setEditor]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState(''),[form,setForm]=useState(empty);
   const load = () => api('/api/users').then(d => setUsers(d.users || [])).catch(e => setError(e.message)).finally(() => setLoading(false));
-  useEffect(() => {
-    load();
-  }, []);
+  useEffect(() => {load();}, []);
+  const open=user=>{setError('');setEditor(user||'new');setForm(user?{username:user.username,displayName:user.displayName||'',password:'',role:user.role,crusherIds:user.crusherIds||[],jettyIds:user.jettyIds||[],active:user.active!==false}:empty);};
+  const close=()=>{if(!busy){setEditor(null);setError('');}};
   const submit = async e => {
     e.preventDefault();
     setError('');
     setBusy(true);
     try {
-      await api('/api/users', {
-        method: 'POST',
-        headers: {
-          'X-CSRF-Token': csrf
-        },
-        body: JSON.stringify(form)
-      });
-      setAdding(false);
-      setForm({
-        username: '',
-        displayName: '',
-        password: '',
-        role: 'stock',
-        crusherIds: [],
-        jettyIds: []
-      });
+      const editing=editor!=='new';
+      await api(editing?`/api/users/${encodeURIComponent(editor.id)}`:'/api/users',{method:editing?'PATCH':'POST',headers:{'X-CSRF-Token':csrf},body:JSON.stringify(form)});
+      setEditor(null);
       await load();
-      notify('Akun operator berhasil dibuat.');
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setBusy(false);
-    }
+      notify(editing?'Akun pengguna berhasil diperbarui.':'Akun operator berhasil dibuat.');
+    } catch (e) {setError(e.message);} finally {setBusy(false);}
   };
-  return <Panel title={tr("Akun & kewenangan operator")} subtitle={tr("Akun memiliki peran dan cakupan crusher / jetty. Password tidak ditampilkan kembali.")} action={<Button icon={Plus} onClick={() => setAdding(true)}>{tr("Buat akun")}</Button>}>{error && !adding && <div className="form-error">{tr(error)}</div>}<DataTable headers={[tr("Nama pengguna"), tr("Username"), tr("Peran"), tr("Cakupan lokasi"), tr("Status")]}>{users.map(u => <tr key={u.id}><td><b>{u.displayName || u.name}</b></td><td>{u.username}</td><td>{roleName[u.role]||u.role}</td><td>{u.role === 'admin' ? tr("Semua lokasi") : u.role === 'driver' ? tr("Sesuai penugasan ritase") : u.role === 'stock' ? (u.crusherIds || []).map(id => lookup(crushers, id)?.name || id).join(', ') : (u.jettyIds || []).map(id => lookup(jetties, id)?.name || id).join(', ')}</td><td><Badge tone={u.active !== false ? 'green' : 'neutral'}>{u.active !== false ? tr("Aktif") : tr("Nonaktif")}</Badge></td></tr>)}</DataTable>{loading && <div className="inline-loading"><Loader2 className="spin" size={17} />{tr("Mengambil akun…")}</div>}{adding && <Modal title={tr("Buat akun pengguna")} subtitle={tr("Berikan password melalui saluran pribadi kepada pemilik akun.")} onClose={() => setAdding(false)}><form onSubmit={submit}><div className="form-grid two"><Field label={tr("Username")}><input required autoComplete="off" pattern="[a-zA-Z0-9._@-]+" value={form.username} onChange={e => setForm({
-              ...form,
-              username: e.target.value
-            })} /></Field><Field label={tr("Nama tampilan")}><input required value={form.displayName} onChange={e => setForm({
-              ...form,
-              displayName: e.target.value
-            })} /></Field><Field label={tr("Password")} hint={tr("Minimal 12 karakter.")}><input required autoComplete="new-password" type="password" minLength={12} value={form.password} onChange={e => setForm({
-              ...form,
-              password: e.target.value
-            })} /></Field><Field label={tr("Peran")}><select value={form.role} onChange={e => setForm({
-              ...form,
-              role: e.target.value,
-              crusherIds: [],
-              jettyIds: []
-            })}><option value="stock">{tr("Operator stockpile")}</option><option value="jetty">{tr("Operator jetty")}</option><option value="admin">{tr("Administrator")}</option><option value="driver">{tr("Pengemudi")}</option></select></Field></div>{['stock','jetty'].includes(form.role) && <fieldset className="scope-checks"><legend>{tr("Cakupan ")}{form.role === 'stock' ? tr('Area stok') : 'jetty'}</legend>{(form.role === 'stock' ? crushers : jetties).map(row => {
-            const key = form.role === 'stock' ? "crusherIds" : "jettyIds";
-            return <label key={row.id}><input type="checkbox" checked={form[key].includes(row.id)} onChange={e => setForm({
-                ...form,
-                [key]: e.target.checked ? [...form[key], row.id] : form[key].filter(id => id !== row.id)
-              })} />{row.name}</label>;
-          })}</fieldset>}{error && <div className="form-error" role="alert">{tr(error)}</div>}<div className="modal-actions"><Button variant="secondary" onClick={() => setAdding(false)}>{tr("Batal")}</Button><Button type="submit" disabled={busy || form.role === 'stock' && !form.crusherIds.length || form.role === 'jetty' && !form.jettyIds.length} icon={Users}>{tr("Buat akun")}</Button></div></form></Modal>}</Panel>;
+  const remove=async user=>{
+    if(!window.confirm(tr("Hapus akun {0}? Tindakan ini tidak dapat dibatalkan.",user.username)))return;
+    setError('');setBusy(true);
+    try{await api(`/api/users/${encodeURIComponent(user.id)}`,{method:'DELETE',headers:{'X-CSRF-Token':csrf}});await load();notify('Akun pengguna berhasil dihapus.');}
+    catch(e){setError(e.message);}finally{setBusy(false);}
+  };
+  const scope=user=>user.role==='admin'?tr("Semua lokasi"):user.role==='driver'?tr("Sesuai penugasan ritase"):user.role==='stock'?(user.crusherIds||[]).map(id=>lookup(crushers,id)?.name||id).join(', '):(user.jettyIds||[]).map(id=>lookup(jetties,id)?.name||id).join(', ');
+  return <Panel title={tr("Akun & kewenangan operator")} subtitle={tr("Akun memiliki peran dan cakupan crusher / jetty. Password tidak ditampilkan kembali.")} action={<Button icon={Plus} onClick={()=>open(null)}>{tr("Buat akun")}</Button>}>
+    {error&&!editor&&<div className="form-error" role="alert">{tr(error)}</div>}
+    <DataTable headers={[tr("Nama pengguna"),tr("Username"),tr("Peran"),tr("Cakupan lokasi"),tr("Status"),tr("Aksi")]}>{users.map(user=><tr key={user.id}><td><b>{user.displayName||user.name}</b></td><td>{user.username}</td><td>{roleName[user.role]||user.role}</td><td>{scope(user)}</td><td><Badge tone={user.active!==false?'green':'neutral'}>{user.active!==false?tr("Aktif"):tr("Nonaktif")}</Badge></td><td><div className="row-actions"><button className="text-btn" type="button" onClick={()=>open(user)}>{tr("Edit")}<ChevronRight size={14}/></button><button className="text-btn danger" type="button" disabled={busy} onClick={()=>remove(user)}><Trash2 size={13}/>{tr("Hapus")}</button></div></td></tr>)}</DataTable>
+    {loading&&<div className="inline-loading"><Loader2 className="spin" size={17}/>{tr("Mengambil akun…")}</div>}
+    {editor&&<Modal title={editor==='new'?tr("Buat akun pengguna"):tr("Edit akun pengguna")} subtitle={editor==='new'?tr("Berikan password melalui saluran pribadi kepada pemilik akun."):tr("Kosongkan password jika tidak ingin menggantinya.")} onClose={close}><form onSubmit={submit}><div className="form-grid two">
+      <Field label={tr("Username")}><input required autoComplete="off" pattern="[a-zA-Z0-9._@-]+" value={form.username} onChange={e=>setForm({...form,username:e.target.value})}/></Field>
+      <Field label={tr("Nama tampilan")}><input required value={form.displayName} onChange={e=>setForm({...form,displayName:e.target.value})}/></Field>
+      <Field label={tr("Password")} hint={editor==='new'?tr("Minimal 12 karakter."):tr("Opsional, minimal 12 karakter jika diganti.")}><input required={editor==='new'} autoComplete="new-password" type="password" minLength={12} value={form.password} onChange={e=>setForm({...form,password:e.target.value})}/></Field>
+      <Field label={tr("Peran")}><select value={form.role} onChange={e=>setForm({...form,role:e.target.value,crusherIds:[],jettyIds:[]})}><option value="stock">{tr("Operator stockpile")}</option><option value="jetty">{tr("Operator jetty")}</option><option value="admin">{tr("Administrator")}</option><option value="driver">{tr("Pengemudi")}</option></select></Field>
+      {editor!=='new'&&<Field label={tr("Status akun")}><select value={form.active?'true':'false'} onChange={e=>setForm({...form,active:e.target.value==='true'})}><option value="true">{tr("Aktif")}</option><option value="false">{tr("Nonaktif")}</option></select></Field>}
+    </div>{['stock','jetty'].includes(form.role)&&<fieldset className="scope-checks"><legend>{tr("Cakupan ")}{form.role==='stock'?tr('Area stok'):'jetty'}</legend>{(form.role==='stock'?crushers:jetties).map(row=>{const key=form.role==='stock'?'crusherIds':'jettyIds';return <label key={row.id}><input type="checkbox" checked={form[key].includes(row.id)} onChange={e=>setForm({...form,[key]:e.target.checked?[...form[key],row.id]:form[key].filter(id=>id!==row.id)})}/>{row.name}</label>;})}</fieldset>}{error&&<div className="form-error" role="alert">{tr(error)}</div>}<div className="modal-actions"><Button variant="secondary" onClick={close}>{tr("Batal")}</Button><Button type="submit" disabled={busy||form.role==='stock'&&!form.crusherIds.length||form.role==='jetty'&&!form.jettyIds.length} icon={Users}>{editor==='new'?tr("Buat akun"):tr("Simpan perubahan")}</Button></div></form></Modal>}
+  </Panel>;
 }

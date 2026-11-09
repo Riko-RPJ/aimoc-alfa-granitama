@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {buildFleetView, paginateFleet, buildDispatchGroups} from '../src/features/integrated/fleet-dispatch-view.mjs';
+import {buildFleetView, paginateFleet, buildDispatchGroups,buildDispatchTruckRows,paginateDispatchTruckRows} from '../src/features/integrated/fleet-dispatch-view.mjs';
 import {createSeed} from '../server/seed.mjs';
 import {applyIntegratedAction, integratedView} from '../server/integrated-demo-domain.mjs';
 
@@ -90,6 +90,14 @@ test('All trips are grouped per dispatch while retaining the supplied trip order
   assert.deepEqual(groups.map(group => [group.dispatchId, group.code, group.trips.map(trip => trip.id)]), [['d2', 'DSP-002', ['one', 'three']], ['d1', 'DSP-001', ['two']]]);
   assert.deepEqual(options, [{id: 'd2', code: 'DSP-002', count: 2}, {id: 'd1', code: 'DSP-001', count: 1}]);
   assert.deepEqual({tripRows, dispatches}, before);
+});
+
+test('dispatch summary groups serial trips by truck and paginates five trucks per dispatch',()=>{
+ const trips=Array.from({length:7},(_,index)=>({id:`t${index}`,truckId:`truck-${index}`,sequence:index+1,status:'queued'}));
+ trips.push({id:'t0-second',truckId:'truck-0',sequence:8,status:'queued'});
+ const rows=buildDispatchTruckRows(trips),first=paginateDispatchTruckRows(rows,1),second=paginateDispatchTruckRows(rows,2);
+ assert.equal(rows.length,7);assert.equal(rows[0].total,2);assert.equal(rows[0].progress,1);
+ assert.equal(first.rows.length,5);assert.equal(first.pageCount,2);assert.equal(second.rows.length,2);
 });
 
 test('dispatch filter selects only its trips and never leaks unrelated catalog entries', () => {

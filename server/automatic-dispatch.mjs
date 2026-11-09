@@ -97,6 +97,14 @@ export function refreshAutomaticDispatchProgress(s) {
 /** Inside a locked transaction: one dispatch claim, many serial trips per pair. */
 export function scheduleAutomaticDispatch(s,options,actor){
  const assigned=[],blocked=new Set();
+ const activeDrivers=drivers(s,options),activeDriverIds=new Set(activeDrivers.map(driver=>driver.id));
+ for(const task of s.trips.filter(t=>t.source===SOURCE&&open(t)&&t.status==='queued'&&!evidence(t,s)&&(t.truckId||t.assignedDriverUserId))){
+  const truck=s.trucks.find(row=>row.id===task.truckId);
+  if(truck?.active&&valid(truck.bedM3)&&valid(truck.payloadLimitT)&&activeDriverIds.has(task.assignedDriverUserId))continue;
+  task.assignmentHistory=[...(task.assignmentHistory||[]),{truckId:task.truckId||null,assignedDriverUserId:task.assignedDriverUserId||null,assignedAt:task.assignedAt||null,reason:'Incomplete inactive assignment released for automatic reassignment',at:now(),actorId:actor.id}];
+  Object.assign(task,{status:'waiting_truck',truckId:null,assignedDriverUserId:null,assignedDriverName:null,assignmentMode:'AUTOMATIC',assignmentHold:null,estimatedStartAt:null,estimatedReturnAt:null});
+  audit(s,actor,'trip.incomplete_assignment_released',task);
+ }
  validateClaims(s);
  for(;;){
   const queue=waiting(s).filter(t=>!blocked.has(t.id));if(!queue.length)break;
@@ -107,12 +115,12 @@ export function scheduleAutomaticDispatch(s,options,actor){
   const claims=validateClaims(s),policy=dispatch.allocationPolicy,limited=dispatch.workflow==='QUARRY_CILEGON'&&policy!==undefined;
   if(limited&&(!policy||policy.mode!==FLEET_POLICY_MODE||policy.version!==1||!Number.isSafeInteger(policy.totalActiveFleet)||policy.totalActiveFleet<0||policy.baseQuota!==Math.max(5,Math.ceil(policy.totalActiveFleet*0.05))||policy.maxTruckCount!==policy.baseQuota||typeof policy.simulatedDrivers!=='boolean'||policy.driverMode!==(policy.simulatedDrivers?'REAL_THEN_SIMULATED':'REAL_ONLY')))fail('Kebijakan alokasi armada dispatch tidak valid; rekonsiliasi operator diperlukan.');
   const allowVirtual=limited&&policy.simulatedDrivers===true&&fleetSimulationEnabled(s);
-  const activeDrivers=drivers(s,options).filter(d=>!isSimulatedFleetDriver(d)||allowVirtual);
-  const freeDrivers=activeDrivers.filter(d=>!isSimulatedFleetDriver(d)&&!claims.driverClaims.has(d.id));
+  const eligibleDrivers=activeDrivers.filter(d=>!isSimulatedFleetDriver(d)||allowVirtual);
+  const freeDrivers=eligibleDrivers.filter(d=>!isSimulatedFleetDriver(d)&&!claims.driverClaims.has(d.id));
   const freeTrucks=s.trucks.filter(v=>v.active&&!claims.truckClaims.has(v.id)&&valid(v.bedM3)&&valid(v.payloadLimitT));
   const pairs=[];
   for(const [truckId,claim]of claims.truckClaims){
-   const truck=s.trucks.find(v=>v.id===truckId),driver=activeDrivers.find(d=>d.id===claim.driverId);
+   const truck=s.trucks.find(v=>v.id===truckId),driver=eligibleDrivers.find(d=>d.id===claim.driverId);
    if(claim.key===task.dispatchId&&claim.trips.every(t=>t.source===SOURCE)&&truck?.active&&driver&&valid(truck.bedM3)&&valid(truck.payloadLimitT))pairs.push({truck,driver,load:claim.trips.length*truck.cycleMinutes});
   }
   // Only AVAILABLE units enter a new dispatch. Once bound, the same pair may
@@ -121,7 +129,7 @@ export function scheduleAutomaticDispatch(s,options,actor){
   let slots=limited?Math.max(0,policy.maxTruckCount-claimedCount):Infinity;
   for(const truck of freeTrucks.sort((a,b)=>Math.min(b.payloadLimitT,b.bedM3*task.densityTPerM3)-Math.min(a.payloadLimitT,a.bedM3*task.densityTPerM3)||a.code.localeCompare(b.code))){
    if(slots<=0)break;
-   const driver=freeDrivers.shift()||activeDrivers.find(d=>isSimulatedFleetDriver(d)&&d.truckId===truck.id&&!claims.driverClaims.has(d.id));
+   const driver=freeDrivers.shift()||eligibleDrivers.find(d=>isSimulatedFleetDriver(d)&&d.truckId===truck.id&&!claims.driverClaims.has(d.id));
    if(!driver)continue;pairs.push({truck,driver,load:0});slots--;
   }
   if(!pairs.length){blocked.add(task.id);continue;}

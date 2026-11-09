@@ -32,15 +32,43 @@ test('planned Driver routes are not exposed as running legacy pages',()=>{
   assert.deepEqual(targetNavigation.DRIVER,['/driver/home','/driver/tasks','/driver/history','/driver/profile']);
   assert.equal(defaultLegacyPage('driver'),null);
 });
+test('Driver omits its redundant single-item workspace navigation',async()=>{
+  const source=await readFile(new URL('../src/features/integrated/IntegratedWorkspace.jsx',import.meta.url),'utf8');
+  assert.match(source,/role!=='driver'&&<WorkspaceNavigation/);
+});
+test('Driver starts with one active QR and reveals backend load details only after scan',async()=>{
+  const workspace=await readFile(new URL('../src/features/integrated/IntegratedWorkspace.jsx',import.meta.url),'utf8');
+  const qr=await readFile(new URL('../src/features/integrated/DriverAssignmentQrModal.jsx',import.meta.url),'utf8');
+  assert.match(workspace,/className="ig-driver-qr-toggle"/);
+  assert.match(workspace,/Sembunyikan QR/);
+  assert.match(workspace,/DriverAssignmentQrModal embedded/);
+  assert.match(workspace,/driverCurrentTrip/);
+  for(const text of ["L('Tugas Baru','New Assignment')","L('Keluar','Sign out')",'driverCompletion.tonnes','driverCompletion.volume'])assert.ok(workspace.includes(text),`Missing Driver completion control: ${text}`);
+  assert.doesNotMatch(workspace,/DriverDailySummary summary=/);
+  assert.doesNotMatch(workspace,/Scan QR Dispatch/);
+  assert.match(qr,/driver-dispatch-qr-panel/);
+  assert.match(qr,/scanned&&<>/);
+  assert.match(workspace,/qrVisible=\{driverQrVisible\}/);
+  assert.match(workspace,/driver-all-tasks-completed/);
+  assert.match(qr,/\(!embedded\|\|qrVisible\)&&<section/);
+  assert.doesNotMatch(qr,/previousProof/);
+  assert.match(qr,/!embedded&&<Button variant="secondary"/);
+  for(const field of ["L('Scan','Scan')","L('Selesai','Complete')",'Kode dump truk','Plat / internal kendaraan','Nama Driver','Berat truk sebelum diisi muatan','Menunggu data TARE','Total material yang akan diisi','Kode material','Lokasi muat','Berat bersih muatan WIM'])assert.ok(qr.includes(field),`Missing Driver detail label: ${field}`);
+  assert.doesNotMatch(qr,/Tipe indeks truk/);
+  assert.match(workspace,/Total ritase diselesaikan/);
+  assert.match(workspace,/Total muatan di-load/);
+});
 test('Stockpile login design is selected only by the Stockpile route',async()=>{
   const source=await readFile(new URL('../src/features/auth/index.jsx',import.meta.url),'utf8');
-  assert.match(source,/pathname\.startsWith\('\/stockpile'\)/);
-  assert.match(source,/if \(!window\.location\.pathname.*return <div className="login-shell">/);
+  assert.match(source,/if \(requiredRole !== 'stock'\)/);
+  assert.match(source,/driver-login/);
   assert.match(source,/selectTheme\('light'\)/);
   assert.match(source,/selectTheme\('dark'\)/);
   assert.match(source,/aimoc\.stockpile\.theme/);
   assert.match(source,/placeholder="Masukkan username Stockpile"/);
   assert.match(source,/JSON\.stringify\(\{ username, password \}\)/);
+  assert.match(source,/data\.user\?\.role!==requiredRole/);
+  assert.match(source,/Anda harus login sebagai/);
 });
 test('Stockpile landing exposes exactly two backend-integrated tasks',async()=>{
   const source=await readFile(new URL('../src/features/pages/stockpile/StockpileMenuPage.jsx',import.meta.url),'utf8');
@@ -51,20 +79,42 @@ test('Stockpile landing exposes exactly two backend-integrated tasks',async()=>{
   assert.match(source,/selectTheme\('light'\)/);
   assert.match(source,/selectTheme\('dark'\)/);
   assert.match(source,/context\.openMeasurement\(\)/);
-  assert.match(source,/\/stockpile\/add-material/);
   assert.match(source,/\['pending','needs_calibration'\]\.includes\(row\.status\)/);
   assert.match(source,/pageSize=6/);
   assert.match(source,/Filter status/);
   assert.match(source,/context\.scopeStock\.map/);
   assert.match(source,/row\.status!=='approved'/);
   assert.match(source,/officialStock:true/);
+  assert.match(source,/volumeM3\*material\.densityTPerM3/);
+  assert.match(source,/MaterialQuantity/);
 });
 test('Stockpile material form is a dedicated two-step page',async()=>{
   const source=await readFile(new URL('../src/features/inventory/index.jsx',import.meta.url),'utf8');
   assert.match(source,/stockpile-measurement-workspace/);
+  assert.match(source,/\[step, setStep\] = useState\(1\)/);
   assert.match(source,/Sumber & material/);
   assert.match(source,/Pengukuran & bukti/);
   assert.match(source,/setStep\(2\)/);
   assert.match(source,/setStep\(1\)/);
   assert.match(source,/tr\("Submit"\)/);
+});
+test('active Integrated workspace renders the scoped Stockpile tablet experience',async()=>{
+  const source=await readFile(new URL('../src/features/integrated/IntegratedWorkspace.jsx',import.meta.url),'utf8');
+  assert.match(source,/import \{StockpileMenuPage\}/);
+  assert.match(source,/if\(role==='stock'\)/);
+  assert.match(source,/allowedCrusherIds\.has\(row\.crusherId\)/);
+  assert.match(source,/stockIds\.has\(row\.stockpileId\)/);
+  assert.match(source,/data-testid="stockpile-tablet-workspace"/);
+  assert.match(source,/act\('measurement\.create',payload,\{legacy:true\}\)/);
+  assert.match(source,/window\.location\.pathname==='\/stockpile\/add-material'/);
+  assert.match(source,/history\.pushState\(\{\},'',\'\/stockpile\/add-material\'\);setModal\(\{type:'measurement'\}\)/);
+  assert.match(source,/setModal\(window\.location\.pathname==='\/stockpile\/add-material'\?\{type:'measurement'\}:null\)/);
+});
+test('active app requires the role selected by the login URL',async()=>{
+  const source=await readFile(new URL('../src/App.jsx',import.meta.url),'utf8');
+  assert.match(source,/path\.startsWith\('\/stockpile'\)\?'stock'/);
+  assert.match(source,/path\.startsWith\('\/driver'\)\?'driver'/);
+  assert.match(source,/:'admin';/);
+  assert.match(source,/session\.user\.role!==requiredRole/);
+  assert.match(source,/<Login requiredRole=\{requiredRole\}/);
 });
