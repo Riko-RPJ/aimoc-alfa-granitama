@@ -18,6 +18,7 @@ import { LegacyJettyPage } from './features/pages/jetty/index.jsx';
 import { MasterDataPage } from './features/pages/master/index.jsx';
 import { AuditPage } from './features/pages/audit/index.jsx';
 import { StockpileActivityPage, StockpileHomePage, StockpileInventoryPage, StockpilePickupsPage } from './features/pages/stockpile/index.jsx';
+import { StockpileMenuPage } from './features/pages/stockpile/StockpileMenuPage.jsx';
 import { Badge, LanguageSwitcher, Empty, Button, Field, Modal, StatCard, Panel, DataTable, ProgressBar } from './components/ui/index.jsx';
 import { Brand, BrandPartners } from './components/brand/index.jsx';
 import { statusText } from './domain/legacy-status.js';
@@ -271,7 +272,7 @@ export function LegacyApp() {
     setSearch('');
   };
   useEffect(() => {
-    if (!user || !defaultLegacyPage(role)) return;
+    if (!user || role==='stock' || !defaultLegacyPage(role)) return;
     const readRoute = () => {
       const fromPath = legacyPageFromPath(role, window.location.pathname);
       if (fromPath && permittedNav.some(([id]) => id === fromPath)) {
@@ -311,6 +312,10 @@ export function LegacyApp() {
   }} />;
   if(CROSS_ROLE_UAT) return <CrossRoleUatPage logout={logout} user={user} csrf={csrf}/>;
   if (role === 'driver') return <DriverLayout logout={logout} user={user} csrf={csrf} />;
+  if (role === 'stock') return <><StockpileMenuPage logout={logout} context={{...pageContext,refresh,loading:!data,error:loadError}} />
+    {toast && <div role="status" className={`toast ${toast.type}`}>{toast.type === 'error' ? <CircleHelp size={19} /> : <CheckCircle2 size={19} />}<span>{tr(toast.text)}</span><button onClick={() => setToast(null)} aria-label={tr("Tutup notifikasi")}><X size={16} /></button></div>}
+    {modal?.type === 'measurement' && <div className={`tablet-measurement-theme stockpile-measurement-page ${localStorage.getItem('aimoc.stockpile.theme')==='dark'?'dark':'light'}`}><MeasurementModal embedded {...{scopeStock,products,crushers,busy,csrf,notify}} initial={modal} onClose={() => {window.history.pushState(null,'','/stockpile');setModal(null)}} onSubmit={async p => {if(!window.confirm('Periksa kembali lokasi, SKU, hasil ukur, dan bukti. Kirim pengajuan ini?'))throw new Error('Pengajuan belum dikirim.');const result=await mutate('measurement.create',p,{message:"Pengajuan stok berhasil dikirim dan menunggu persetujuan."});window.history.pushState(null,'','/stockpile');return result}} /></div>}
+  </>;
   return <div className="app-shell">
   {role === 'stock'
     ? <StockpileLayout {...{mobileNav,setMobileNav,navs:permittedNav,page:visiblePage,selectPage,requests,user,roleName,role,logout}} />

@@ -55,10 +55,12 @@ export function Modal({
   subtitle,
   children,
   onClose,
-  wide = false
+  wide = false,
+  embedded = false
 }) {
   const ref = useRef();
   useEffect(() => {
+    if (embedded) return;
     const old = document.activeElement;
     ref.current?.focus();
     const key = e => {
@@ -83,8 +85,9 @@ export function Modal({
       document.removeEventListener('keydown', key);
       old?.focus?.();
     };
-  }, []);
-  return <div className="modal-backdrop" onMouseDown={e => e.target === e.currentTarget && onClose()}><section className={`modal ${wide ? 'wide' : ''}`} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} ref={ref}><div className="modal-heading"><div><h2>{title}</h2>{subtitle && <p>{subtitle}</p>}</div><div className="modal-heading-tools"><LanguageSwitcher compact /><button className="icon-btn" onClick={onClose} aria-label={tr("Tutup")}><X size={21} /></button></div></div>{children}</section></div>;
+  }, [embedded]);
+  const content=<section className={`modal ${wide ? 'wide' : ''} ${embedded ? 'embedded' : ''}`} role={embedded?'region':'dialog'} aria-modal={embedded?undefined:'true'} aria-label={title} tabIndex={embedded?undefined:-1} ref={ref}><div className="modal-heading"><div><h2>{title}</h2>{subtitle && <p>{subtitle}</p>}</div><div className="modal-heading-tools"><LanguageSwitcher compact /><button className="icon-btn" onClick={onClose} aria-label={tr("Tutup")}><X size={21} /></button></div></div>{children}</section>;
+  return embedded?content:<div className="modal-backdrop" onMouseDown={e => e.target === e.currentTarget && onClose()}>{content}</div>;
 }
 
 export function StatCard({
