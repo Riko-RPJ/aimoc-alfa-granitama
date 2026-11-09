@@ -44,6 +44,27 @@ test('Admin and scoped Stockpile can submit survey measurements; approval remain
  assert.equal(s.measurements.length,2);
  assert.equal(act(s,'measurement.approve',{measurementId:pending.entityId},admin).entityId,pending.entityId);
 });
+test('Stockpile manual measurement accepts tonnes and server converts with the stock SKU density',()=>{
+ const s=createSeed(),pile=s.stockpiles[0],product=s.products.find(x=>x.id===pile.skuId);
+ act(s,'measurement.create',{stockpileId:pile.id,skuId:pile.skuId,method:'manual',unit:'t',quantity:150,notes:'Survei timbang'},stock);
+ const measurement=s.measurements[0];
+ assert.equal(measurement.measuredUnit,'t');
+ assert.equal(measurement.measuredQuantity,150);
+ assert.equal(measurement.tonnageT,150);
+ assert.equal(measurement.volumeM3,Math.round(150/product.densityTPerM3*1e6)/1e6);
+ assert.throws(()=>act(s,'measurement.create',{stockpileId:pile.id,method:'manual',unit:'kg',quantity:1},stock),e=>e.code==='UNIT_INVALID');
+});
+test('pending Stockpile submissions remain scoped and disappear only after Admin approval',()=>{
+ const s=createSeed(),pile=s.stockpiles[0],before=pile.onHandM3;
+ const first=act(s,'measurement.create',{stockpileId:pile.id,method:'manual',volumeM3:700,notes:'Survei 1'},stock);
+ act(s,'measurement.create',{stockpileId:pile.id,method:'manual',volumeM3:710,notes:'Survei 2'},stock);
+ assert.equal(pile.onHandM3,before);
+ assert.equal(publicState(s,stock).measurements.filter(x=>x.status==='pending').length,2);
+ act(s,'measurement.approve',{measurementId:first.entityId},admin);
+ assert.equal(pile.onHandM3,700);
+ assert.equal(publicState(s,stock).measurements.filter(x=>x.status==='pending').length,1);
+ assert.throws(()=>act(s,'measurement.approve',{measurementId:s.measurements[1].id},stock),e=>e.status===403);
+});
 test('photo without calibration cannot produce or approve cubic meters',()=>{const s=createSeed(),res=act(s,'measurement.create',{stockpileId:'stock-1-1',skuId:'abu-batu',method:'camera_pending',volumeM3:999,evidenceId:'photo-1'},stock);const m=s.measurements[0];assert.equal(m.volumeM3,null);assert.equal(m.status,'needs_calibration');assert.throws(()=>act(s,'measurement.approve',{measurementId:res.entityId}),e=>e.code==='INVALID_MEASUREMENT');assert.equal(s.stockpiles[0].onHandM3,650);});
 test('geometric estimate remains pending until approval, then audited adjustment is atomic',()=>{const s=createSeed(),res=act(s,'measurement.create',{stockpileId:'stock-1-1',method:'calibrated_geometry',geometry:{lengthM:30,widthM:20,heightM:4,shapeFactor:0.5}},stock);assert.equal(s.measurements[0].volumeM3,1200);assert.equal(s.stockpiles[0].onHandM3,650);assert.throws(()=>act(s,'measurement.approve',{measurementId:res.entityId},stock),e=>e.status===403);act(s,'measurement.approve',{measurementId:res.entityId});assert.equal(s.stockpiles[0].onHandM3,1200);assert.equal(s.inventoryLedger[0].volumeM3,550);assert.throws(()=>act(s,'measurement.approve',{measurementId:res.entityId}),e=>e.code==='INVALID_MEASUREMENT');});
 test('stock survey cannot undercut reserved volume',()=>{const s=createSeed();plan(s,120);const pile=s.stockpiles.find(x=>x.reservedM3>0),m=act(s,'measurement.create',{stockpileId:pile.id,method:'manual',volumeM3:10},{id:'survey-operator',role:'stock',crusherIds:[pile.crusherId]});assert.throws(()=>act(s,'measurement.approve',{measurementId:m.entityId}),e=>e.code==='RESERVED_STOCK');});
