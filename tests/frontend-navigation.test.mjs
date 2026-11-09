@@ -51,7 +51,12 @@ test('Stockpile landing exposes exactly two backend-integrated tasks',async()=>{
   assert.match(source,/selectTheme\('light'\)/);
   assert.match(source,/selectTheme\('dark'\)/);
   assert.match(source,/context\.openMeasurement\(\)/);
-  assert.match(source,/\/stockpile\/add-material/);
+  const workspace=await readFile(new URL('../src/features/integrated/IntegratedWorkspace.jsx',import.meta.url),'utf8');
+  assert.match(workspace,/openMeasurement:.*\/stockpile\/add-material/);
+  assert.match(workspace,/role==='stock'/);
+  assert.match(workspace,/<StockpileMenuPage logout=\{logout\} context=\{context\}/);
+  assert.match(workspace,/scopeStock=\{scopeStock\}/);
+  assert.match(workspace,/legacy:true,close:false/);
   assert.match(source,/\['pending','needs_calibration'\]\.includes\(row\.status\)/);
   assert.match(source,/pageSize=6/);
   assert.match(source,/Filter status/);

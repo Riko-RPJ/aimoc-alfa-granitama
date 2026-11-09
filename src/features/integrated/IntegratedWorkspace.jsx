@@ -5,6 +5,7 @@ import {Brand,BrandPartners} from '../../components/brand/index.jsx';
 import {LanguageSwitcher,Button,Field,Modal} from '../../components/ui/index.jsx';
 import {MasterData,MasterModal} from '../master-data/index.jsx';
 import {MeasurementModal} from '../inventory/index.jsx';
+import {StockpileMenuPage} from '../pages/stockpile/StockpileMenuPage.jsx';
 import {MeasurementValues} from '../inventory/MeasurementValues.jsx';
 import './integrated.css';
 import {RequestDetailModal} from './RequestDetailModal.jsx';
@@ -65,12 +66,13 @@ export function IntegratedWorkspace({user,csrf,logout,logoutError,onUnauthorized
  const initialPage=()=>{if(role==='driver')return 'overview';const suffix=window.location.pathname.split('/').pop();return suffix==='tasks'?'tasks':navs.some(([id])=>id===suffix)?suffix:'overview';};
  const [page,setPage]=useState(initialPage),[snapshot,setSnapshot]=useState(null),[connected,setConnected]=useState(false),[lastSync,setLastSync]=useState(null),[clock,setClock]=useState(Date.now()),[error,setError]=useState(null),[toast,setToast]=useState(''),[busy,setBusy]=useState(false),[modal,setModal]=useState(null),[selected,setSelected]=useState(null),[search,setSearch]=useState(''),[retry,setRetry]=useState(null);
  const [masterTab,setMasterTab]=useState('product'),[planningRequestId,setPlanningRequestId]=useState(null),[dispatchFilter,setDispatchFilter]=useState('all'),[driverTripStatusFilter,setDriverTripStatusFilter]=useState('unfinished');
+ const [stockTheme,setStockTheme]=useState(()=>{try{return localStorage.getItem('aimoc.stockpile.theme')==='dark'?'dark':'light';}catch{return 'light';}});
  const [qrScanTripId,setQrScanTripId]=useState(''),[qrScanPending,setQrScanPending]=useState(false);
  const latest=useRef(-1),reading=useRef(false),alive=useRef(true),mutation=useRef(false);
  const accept=useCallback(d=>{if(!alive.current||!d?.state)return;const revision=n(d.revision);if(revision<latest.current)return;latest.current=revision;setSnapshot(d);setLastSync(Date.now());setConnected(true);setError(current=>current?.mutation?current:null);},[]);
  const refresh=useCallback(async()=>{if(reading.current)return;reading.current=true;try{const r=await fetch('/api/v1/demo/context',{credentials:'same-origin',cache:'no-store'});const d=await r.json();if(!r.ok){if(r.status===401)onUnauthorized();throw Object.assign(new Error(apiErrorSource(d)),{status:r.status});}accept(d);}catch(e){if(alive.current){setConnected(false);setError({text:e.message});}}finally{reading.current=false;}},[accept,onUnauthorized]);
  useEffect(()=>{alive.current=true;refresh();const t=setInterval(()=>{setClock(Date.now());if(document.visibilityState==='visible')refresh();},3000);const visible=()=>{if(document.visibilityState==='visible')refresh();};window.addEventListener('focus',visible);document.addEventListener('visibilitychange',visible);return()=>{alive.current=false;clearInterval(t);window.removeEventListener('focus',visible);document.removeEventListener('visibilitychange',visible);};},[refresh]);
- useEffect(()=>{const onPop=()=>{setPage(initialPage());if(role==='driver'&&window.location.pathname!=='/driver/overview')history.replaceState({},'',`/driver/overview${window.location.search}${window.location.hash}`);};if(role==='driver')onPop();window.addEventListener('popstate',onPop);return()=>window.removeEventListener('popstate',onPop);},[role]);
+ useEffect(()=>{const onPop=()=>{setPage(initialPage());if(role==='stock')setModal(window.location.pathname==='/stockpile/add-material'?{type:'measurement'}:null);if(role==='driver'&&window.location.pathname!=='/driver/overview')history.replaceState({},'',`/driver/overview${window.location.search}${window.location.hash}`);};if(['driver','stock'].includes(role))onPop();window.addEventListener('popstate',onPop);return()=>window.removeEventListener('popstate',onPop);},[role]);
  useEffect(()=>{if(!toast)return;const t=setTimeout(()=>setToast(''),5000);return()=>clearTimeout(t);},[toast]);
  const navigate=id=>{const target=role==='driver'?'overview':id;setPage(target);setSearch('');history.pushState({},'',`/${role==='stock'?'stockpile':role}/${target}`);};
  const execute=async(body,{legacy=false,close=true}={})=>{if(mutation.current)return null;mutation.current=true;setBusy(true);setError(null);try{const r=await fetch(legacy?'/api/action':'/api/v1/demo/actions',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:JSON.stringify(body)});let d;try{d=await r.json();}catch{throw new Error(L('Respons belum dapat dipastikan.','The response could not be confirmed.'));}if(!r.ok){if(r.status===401)onUnauthorized();const e=Object.assign(new Error(apiErrorSource(d)),{status:r.status});throw e;}if(legacy)await refresh();else{accept(d);if(!d.state)await refresh();}setRetry(null);if(close)setModal(null);setToast(L('Perubahan tersimpan di data operasi bersama.','Saved to the shared operation store.'));return d;}catch(e){const uncertain=!e.status||e.status>=500;if(uncertain)setRetry({body,options:{legacy,close}});else setRetry(null);setError({text:e.message,uncertain,mutation:true});if(e.status===409)await refresh();return null;}finally{mutation.current=false;setBusy(false);}};
@@ -119,6 +121,35 @@ export function IntegratedWorkspace({user,csrf,logout,logoutError,onUnauthorized
   <div className="ig-trip-section-body"><div className="ig-trip-filters ig-driver-trip-filters"><label className="ig-filter"><span>{L('Status ritase','Trip status')}</span><select data-testid="driver-trip-status-filter" aria-label={L('Filter status ritase','Trip completion filter')} value={driverTripStatusFilter} onChange={e=>setDriverTripStatusFilter(e.target.value)}><option value="unfinished">{L('Belum selesai','Unfinished')}</option><option value="completed">{L('Sudah selesai','Completed')}</option></select></label><label className="ig-filter"><span>{L('Filter dispatch','Dispatch filter')}</span><select data-testid="trip-dispatch-filter" aria-label={L('Filter ritase per dispatch','Filter trips by dispatch')} value={validDispatchFilter?dispatchFilter:'all'} onChange={e=>setDispatchFilter(e.target.value)}><option value="all">{L('Semua dispatch','All dispatches')}</option>{tripDispatchOptions.map(option=><option key={option.id} value={option.id}>{option.code} · {option.count} {L('ritase','trips')}</option>)}</select></label><label className="ig-search"><span>{L('Cari ritase, dispatch, truk, SKU atau lokasi','Search trip, dispatch, truck, SKU or location')}</span><input value={search} onChange={e=>setSearch(e.target.value)} placeholder={L('Kode ritase / dispatch / truk / SKU','Trip / dispatch / truck / SKU code')}/></label></div><p className="ig-subtle ig-trip-filter-note">{L('Filter status, dispatch, dan pencarian hanya mengubah daftar ritase. Ringkasan harian tetap mengikuti seluruh penugasan Anda.','Status, dispatch and search filters only change the trip list. The daily summary still covers all of your assignments.')}</p></div>
   {!driverGroupedTrips.length?<div className="ig-empty">{L('Tidak ada ritase yang sesuai dengan filter dan pencarian.','No trips match the filter and search.')}</div>:driverGroupedTrips.map(group=><article className="ig-dispatch-trip-group" data-dispatch-id={group.dispatchId} key={group.dispatchId}><div className="ig-dispatch-group-head"><h3 data-testid="trip-group-dispatch" data-dispatch-id={group.dispatchId}>{group.dispatchId==='__without_dispatch__'?L('Tanpa referensi dispatch','No dispatch reference'):group.code}</h3><span>{group.trips.length} {L('ritase ditampilkan','trips shown')}</span></div>{renderTrips(group.trips)}</article>)}
  </Section></div>;
+ if(role==='stock'){
+  const allowedCrusherIds=new Set(array(user.crusherIds));
+  const scopeStock=stockpiles.filter(row=>allowedCrusherIds.has(row.crusherId));
+  const stockIds=new Set(scopeStock.map(row=>row.id));
+  const measurements=array(state.measurements).filter(row=>stockIds.has(row.stockpileId));
+  const selectTheme=value=>{if(!['light','dark'].includes(value))return;localStorage.setItem('aimoc.stockpile.theme',value);setStockTheme(value);};
+  const closeMeasurement=()=>{history.pushState({},'','/stockpile');setModal(null);};
+  const submitMeasurement=async payload=>{
+   if(blocked)throw new Error(L('Data belum tersinkron. Muat ulang sebelum mengirim pengukuran.','Data is not synchronized. Refresh before submitting a measurement.'));
+   const result=await act('measurement.create',payload,{legacy:true,close:false});
+   if(!result)throw new Error(L('Pengajuan belum berhasil disimpan. Periksa pesan kesalahan dan coba lagi.','The measurement was not saved. Check the error and try again.'));
+   closeMeasurement();
+   return result;
+  };
+  const context={
+   scopeStock,measurements,products,crushers,product,crusher,stockpile:pile,
+   refresh,loading:!snapshot,error:!snapshot?error?.text||'':'',
+   theme:stockTheme,selectTheme,
+   openMeasurement:()=>{history.pushState({},'','/stockpile/add-material');setModal({type:'measurement'});}
+  };
+  return <div data-role="stock" data-testid="stockpile-tablet-workspace">
+   <StockpileMenuPage logout={logout} context={context}/>
+   {(error||logoutError)&&<div className="ig-alert" role="alert">{tr(error?.text||logoutError)}</div>}
+   {toast&&<div className="ig-toast" role="status"><Check size={16}/>{toast}</div>}
+   {modal?.type==='measurement'&&<div className={`tablet-measurement-theme stockpile-measurement-page ${stockTheme}`}>
+    <MeasurementModal embedded canUploadEvidence scopeStock={scopeStock} products={products} crushers={crushers} busy={blocked} csrf={csrf} initial={modal} onClose={closeMeasurement} onSubmit={submitMeasurement} notify={message=>setToast(message)}/>
+   </div>}
+  </div>;
+ }
  const title=navs.find(([id])=>id===page)?.[1]||navs[0][1];
  return <div className="ig-app">
   <aside className="ig-sidebar"><Brand light/><div className="ig-workspace-name">{L('RUANG OPERASI TERINTEGRASI','INTEGRATED OPERATIONS')}</div><WorkspaceNavigation items={navs} role={role} currentPage={page} onNavigate={navigate} notifications={state.adminSidebarNotifications} stale={stale} L={L} formatCount={value=>fmt(value,0)}/><div className="ig-sidebar-bottom"><span className="ig-demo-badge">INTEGRATED_DEMO</span><p>{L('Satu data operasi untuk semua peran. QR dan timbang menggunakan simulator.','One operation store across roles. QR and weighing use simulators.')}</p><b>{user.displayName||user.username}</b><small>{({admin:L('Admin AIMOC','AIMOC Admin'),stock:L('Operator stockpile','Stockpile operator'),jetty:L('Operator jetty','Jetty operator'),driver:L('Pengemudi','Driver')})[role]}</small><button onClick={logout}><LogOut size={16}/>{L('Keluar','Sign out')}</button></div></aside>

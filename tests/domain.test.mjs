@@ -46,13 +46,13 @@ test('Admin and scoped Stockpile can submit survey measurements; approval remain
 });
 test('Stockpile manual measurement accepts tonnes and server converts with the stock SKU density',()=>{
  const s=createSeed(),pile=s.stockpiles[0],product=s.products.find(x=>x.id===pile.skuId);
- act(s,'measurement.create',{stockpileId:pile.id,skuId:pile.skuId,method:'manual',unit:'t',quantity:150,notes:'Survei timbang'},stock);
+ act(s,'measurement.create',{stockpileId:pile.id,skuId:pile.skuId,method:'manual',quantityUnit:'t',quantityValue:150,notes:'Survei timbang'},stock);
  const measurement=s.measurements[0];
- assert.equal(measurement.measuredUnit,'t');
- assert.equal(measurement.measuredQuantity,150);
+ assert.equal(measurement.quantityUnit,'t');
+ assert.equal(measurement.quantityValue,150);
  assert.equal(measurement.tonnageT,150);
  assert.equal(measurement.volumeM3,Math.round(150/product.densityTPerM3*1e6)/1e6);
- assert.throws(()=>act(s,'measurement.create',{stockpileId:pile.id,method:'manual',unit:'kg',quantity:1},stock),e=>e.code==='UNIT_INVALID');
+ assert.throws(()=>act(s,'measurement.create',{stockpileId:pile.id,method:'manual',quantityUnit:'kg',quantityValue:1},stock),e=>e.code==='INVALID_MEASUREMENT_UNIT');
 });
 test('pending Stockpile submissions remain scoped and disappear only after Admin approval',()=>{
  const s=createSeed(),pile=s.stockpiles[0],before=pile.onHandM3;
