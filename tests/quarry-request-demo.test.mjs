@@ -66,8 +66,12 @@ test('runner controls are Admin-only, strictly bounded, run-bound and cannot exe
  f.run('step',{runId:id,rounds:1});assert.equal(f.trips().filter(row=>row.status==='ready_to_load').length,2);
 });
 
-test('legacy or non-synthetic requests and bound records cannot be executed by the runner',()=>{
- const legacy=fixture(96,{legacy:true});legacy.reject(()=>legacy.run('start'));
+test('standard planned dispatch uses the same recorded Driver scans while non-synthetic records remain blocked',()=>{
+ const standard=fixture(96,{legacy:true});standard.run('start');const runId=standard.request().demoRun.id;
+ standard.run('step',{runId,rounds:1});assert.ok(standard.trips().every(row=>row.status==='ready_to_load'));
+ assert.equal(standard.state.events.filter(row=>row.type==='trip.driver_scan'&&row.expectedStage===1).length,2);
+ standard.run('step',{runId,rounds:1});assert.ok(standard.trips().every(row=>row.status==='returned'));
+ assert.equal(standard.state.events.filter(row=>row.type==='trip.driver_scan'&&row.expectedStage===2).length,2);
  for(const corrupt of [f=>{f.request().synthetic=false;},f=>{f.state.dispatches[0].synthetic=false;},f=>{f.trips()[0].synthetic=false;},f=>{f.request().source='FIELD_VERIFIED';}]){const f=fixture();corrupt(f);f.reject(()=>f.run('start'));}
 });
 

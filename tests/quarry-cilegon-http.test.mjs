@@ -59,8 +59,8 @@ test('Cilegon real HTTP persists one canonical measurement, receipt and return a
  const entered=await state();assert.equal(Number(entered.revision),Number(planned.revision)+1);assert.equal((await rawTrip(tripId)).weighingEvents.filter(event=>event.type==='TARE').length,1);
  const replay=await action('quarry.gate.scan',entry);assert.equal(replay.status,200);assert.ok(replay.body.replayed||replay.body.result?.replayed);assert.deepEqual(await state(),entered,'Event replay must not bump the canonical revision or timestamp');
  const collision=await action('quarry.gate.scan',{...entry,weightT:16},'admin',{requestId:requestKey});assert.equal(collision.status,409);assert.equal(code(collision),'IDEMPOTENCY_CONFLICT');assert.deepEqual(await state(),entered);
- const shortcut=await action('trip.driver_scan',{tripId,expectedStage:2,externalEventId:randomUUID(),qrValue:assignment.body.qr.value,binding:assignment.body.binding,confirmations:{materialReceived:true,truckReturned:true}},'cilegon-driver');
- assert.equal(shortcut.status,409);assert.deepEqual(await state(),entered,'Driver Scan2 cannot skip actual Cilegon gate and jetty steps');
+ const repeatedEntry=await action('trip.driver_scan',{tripId,expectedStage:1,externalEventId:randomUUID(),qrValue:assignment.body.qr.value,binding:assignment.body.binding},'cilegon-driver');
+ assert.equal(repeatedEntry.status,409);assert.deepEqual(await state(),entered,'Driver cannot replay Scan1 after the shared Quarry entry is recorded');
  await ok('trip.loading',{tripId},'stock1');
  const exit={...entry,laneId:'lane-2',direction:'OUT',purpose:'EXIT',weightT:55,externalEventId:randomUUID()};
  await ok('quarry.gate.scan',exit,'stock1');const departed=await state();

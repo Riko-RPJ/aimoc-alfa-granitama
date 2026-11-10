@@ -54,7 +54,7 @@ test('four Driver/truck pairs run from two crushers concurrently, serialize thei
    const projected=f.projected(row.id,f.source(row.id));assert.ok(projected.quarry.allowedPurposes.includes('ENTRY'));
    assert.equal(f.projected(row.id,jetty).quarry.allowedPurposes.length,0);
    const ownDriver=f.drivers.find(driver=>driver.id===row.assignedDriverUserId),driverTrip=f.projected(row.id,ownDriver);
-   assert.equal(driverTrip.driverScan.canScan,false);assert.equal(driverTrip.driverScan.phase,'QUARRY_WORKFLOW');
+   assert.equal(driverTrip.driverScan.canScan,true);assert.equal(driverTrip.driverScan.phase,round?'READY_TO_LOAD':'FIRST_SCAN_READY');
    f.reject(()=>f.act('trip.driver_scan',{tripId:row.id,expectedStage:2,externalEventId:randomUUID(),qrValue:passes[queues.findIndex(queue=>queue[round].id===row.id)],confirmations:{materialReceived:true,truckReturned:true}},ownDriver));
    f.gate(row.id,'ENTRY',round?{laneId:'lane-3'}:{weightT:15});
   }

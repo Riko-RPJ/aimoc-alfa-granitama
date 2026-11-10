@@ -3,11 +3,12 @@ import {isDispatchSourceArea} from '../shared/inventory-areas.mjs';
 import {summarizeDriverDailyTrips} from './driver-daily-summary.mjs';
 import {summarizeAdminSidebarNotifications} from './admin-sidebar-notifications.mjs';
 import {applyDriverScan,driverScanProgress,DRIVER_TWO_SCAN_MODE} from './driver-two-scan.mjs';
+import {driverAssignmentQr} from './driver-assignment-qr.mjs';
 import {DomainError,trimLegacyDisplayEvents} from './domain.mjs';
 import {requestLifecycle,requestRevision,assertRequestChange} from './request-lifecycle.mjs';
 import {ensureStockpileLocations, stockpileLocationsForRead, applyStockpileLocationAction, resolveStockpileDestination, ensureReceivingStockpilesForRequest} from './stockpile-locations.mjs';
 import {scheduleAutomaticDispatch,automaticDispatchSummary,truckAvailability,assertSerialDispatchClaims,refreshAutomaticDispatchProgress as aggregate} from './automatic-dispatch.mjs';
-import {QUARRY_CILEGON_WORKFLOW,isQuarryCilegon,quarryCilegonConfig,applyQuarryCilegonAction,quarryTripProjection,quarryErpFields} from './quarry-cilegon-domain.mjs';
+import {QUARRY_CILEGON_WORKFLOW,isQuarryCilegon,quarryCilegonConfig,applyQuarryCilegonAction,quarryTripProjection,quarryErpFields,quarryDispatchPass,quarryReusableTare} from './quarry-cilegon-domain.mjs';
 import {quarrySourceBudgets} from './quarry-source-budgets.mjs';
 import {effectiveFleetDrivers,isSimulatedFleetDriver,fleetSimulationEnabled,fleetDispatchPolicy,fleetPolicyProjection,applyFleetSimulationConfigure} from './fleet-simulation.mjs';
 export {allocateAutomaticDispatch,upgradeToAutomaticDispatch} from './automatic-dispatch.mjs';
@@ -245,7 +246,7 @@ function moveTrip(s, action, p, actor, options) {
   const sourceScope = () => scope(actor, 'stock', stock.crusherId);
   const destinationScope = () => scope(actor, t.transferMode === 'LAND' ? 'stock' : 'jetty', t.transferMode === 'LAND' ? t.destinationCrusherId : t.jettyId);
   const isState = (...statuses) => { if (!statuses.includes(t.status)) fail(`Status ${t.status}; tindakan membutuhkan ${statuses.join('/')}.`, 'INVALID_TRANSITION', 409); };
-  if(options.quarryGateAuthorized)sourceScope();
+  if(options.quarryGateAuthorized)options.quarryDriverAuthorized?driver(actor,t):sourceScope();
   else if (action === 'qr') admin(actor);
   else if (['start', 'return_start'].includes(action)) driver(actor, t);
   else if (['arrive', 'receive'].includes(action)) destinationScope();
@@ -339,6 +340,45 @@ function moveTrip(s, action, p, actor, options) {
   return {entityId: t.id, tripId: t.id, source: SOURCE, status: t.status,...scheduling};
 }
 
+function quarryDriverProgress(s,t,actor,options){
+  const assigned=actor?.role==='driver'&&actor.id===t.assignedDriverUserId&&driverCatalog(options.drivers).some(user=>user.id===actor.id);
+  const previous=s.trips.some(other=>other.id!==t.id&&other.dispatchId===t.dispatchId&&other.truckId===t.truckId&&other.assignedDriverUserId===t.assignedDriverUserId&&other.sequence<t.sequence&&other.status==='returned');
+  const first=['queued','start_pending'].includes(t.status)&&!previous,complete=t.status==='returned';
+  return {mode:QUARRY_CILEGON_WORKFLOW,phase:complete?'COMPLETED':first?'FIRST_SCAN_READY':'READY_TO_LOAD',nextStage:complete?null:first?1:2,canScan:assigned&&!complete,reason:assigned&&!complete?null:complete?'COMPLETED':'DRIVER_SCAN_FORBIDDEN',quantityBasis:'SCALE_SIMULATION',measurementPending:!t.grossEventId};
+}
+
+function applyQuarryDriverScan(s,p,actor,options){
+  const allowed=['tripId','qrValue','binding','expectedStage','externalEventId','confirmations'];
+  if(!p||Object.keys(p).some(key=>!allowed.includes(key))||typeof p.tripId!=='string'||typeof p.externalEventId!=='string'||![1,2].includes(p.expectedStage)||typeof p.qrValue!=='string'||!p.binding||typeof p.binding!=='object'||Array.isArray(p.binding))fail('Payload scan Driver Quarry tidak valid.','DRIVER_SCAN_PAYLOAD_INVALID');
+  const t=row(s,'trips',p.tripId),progress=quarryDriverProgress(s,t,actor,options);
+  if(!isQuarryCilegon(t)||!progress.canScan||progress.nextStage!==p.expectedStage)fail('Tahap scan tidak sesuai ritase Quarry aktif.','DRIVER_SCAN_STAGE_CONFLICT',409);
+  const descriptor=driverAssignmentQr(s,actor,{tripId:t.id,drivers:options.drivers});
+  if(p.qrValue!==descriptor.qr.value||fingerprint(p.binding)!==fingerprint(descriptor.binding))fail('QR atau penugasan telah berubah. Muat ulang QR ritase.','DRIVER_SCAN_BINDING_INVALID',409);
+  if(p.expectedStage===1&&Object.hasOwn(p,'confirmations')||p.expectedStage===2&&(!p.confirmations||Object.keys(p.confirmations).sort().join(',')!=='materialReceived,truckReturned'||p.confirmations.materialReceived!==true||p.confirmations.truckReturned!==true))fail('Konfirmasi scan tidak sesuai tahap ritase.','DRIVER_SCAN_CONFIRMATION_REQUIRED',400);
+  const digest=fingerprint({action:'trip.driver_scan',payload:{...p,externalEventId:undefined}}),prior=s.events.find(item=>item.source===SOURCE&&item.externalEventId===p.externalEventId);
+  if(prior){if(prior.type!=='trip.driver_scan'||prior.entityId!==t.id||prior.actorId!==actor.id||prior.eventFingerprint!==digest)fail('ID event scan digunakan dengan isi berbeda.','EVENT_CONFLICT',409);return {...prior.scanResult,replayed:true};}
+  const command=(action,payload)=>applyQuarryCilegonAction(s,action,payload,actor,{...options,quarryDriverAuthorized:true},{moveTrip:(name,data,extra)=>moveTrip(s,name,data,actor,extra)});
+  const receiver={id:'quarry-driver-scan-simulator',name:'Quarry receipt simulator',role:'jetty',jettyIds:[t.jettyId]};
+  const derived=purpose=>'qds-'+createHash('sha256').update(`${p.externalEventId}|${purpose}`).digest('hex').slice(0,56);
+  const gate=purpose=>{
+    const config=quarryCilegonConfig(s),direction=purpose==='EXIT'?'OUT':'IN',reuse=purpose==='ENTRY'&&quarryReusableTare(s,t);
+    const lane=(purpose==='RETURN'||reuse?config.lanes.find(item=>item.id==='lane-3'&&item.active&&['BIDIRECTIONAL',direction].includes(item.direction)):null)||config.lanes.find(item=>item.active&&['WIM','STATIC'].includes(item.mode)&&['BIDIRECTIONAL',direction].includes(item.direction));
+    if(!lane)fail('Tidak ada lajur Quarry yang tersedia.','QUARRY_LANE_UNAVAILABLE',409);
+    return command('quarry.gate.scan',{tripId:t.id,truckId:t.truckId,laneId:lane.id,direction,purpose,qrValue:quarryDispatchPass(t).value,externalEventId:derived(purpose),...(purpose==='ENTRY'&&lane.mode!=='QR_ONLY'?{weightT:round(row(s,'trucks',t.truckId).payloadLimitT*.45)}:purpose==='EXIT'?{weightT:round(t.tareT+t.tonnageT)}:{})});
+  };
+  if(['queued','start_pending'].includes(t.status))gate('ENTRY');
+  if(p.expectedStage===2){
+    if(t.status==='ready_to_load')moveTrip(s,'loading',{tripId:t.id,externalEventId:derived('loading')},actor,{...options,quarryGateAuthorized:true,quarryDriverAuthorized:true});
+    if(t.status==='loading')gate('EXIT');
+    if(t.status==='in_transit')moveTrip(s,'arrive',{tripId:t.id,externalEventId:derived('arrive')},receiver,options);
+    if(t.status==='arrived')moveTrip(s,'receive',{tripId:t.id,externalEventId:derived('receive')},receiver,options);
+    if(['unloaded','returning'].includes(t.status))gate('RETURN');
+  }
+  const result={entityId:t.id,tripId:t.id,source:SOURCE,status:t.status,displayStatus:t.status==='returned'?'completed':t.status,acceptedStage:p.expectedStage,driverScanMode:QUARRY_CILEGON_WORKFLOW};
+  event(s,actor,'trip.driver_scan',t.id,{externalEventId:p.externalEventId,eventFingerprint:digest,expectedStage:p.expectedStage,scanResult:result});
+  return result;
+}
+
 /** Apply to a draft and replace only after validation, including direct callers. */
 export function applyIntegratedAction(state, action, payload, actor, options = {}) {
   if (!actor?.id || !['admin', 'stock', 'jetty', 'driver'].includes(actor.role)) fail('Akun tidak berwenang.', 'FORBIDDEN', 403);
@@ -359,7 +399,7 @@ export function applyIntegratedAction(state, action, payload, actor, options = {
     if(actor.role!=='driver'||Object.keys(payload).length)fail('Hanya Driver aktif yang dapat memperbarui penugasan.','FORBIDDEN',403);
     result=scheduleAutomaticDispatch(draft,options,actor);
   }
-  else if (action === 'trip.driver_scan') result = applyDriverScan(draft,payload,actor,options);
+  else if (action === 'trip.driver_scan') result = isQuarryCilegon(draft.trips.find(item=>item.id===payload.tripId))?applyQuarryDriverScan(draft,payload,actor,options):applyDriverScan(draft,payload,actor,options);
   else if (typeof action === 'string' && action.startsWith('trip.')) result = moveTrip(draft, action.slice(5), payload, actor, options);
   else fail('Tindakan demo tidak didukung.', 'ACTION_NOT_FOUND', 404);
   if((action==='trip.driver_scan'||action==='quarry.gate.scan')&&result.replayed===true)return result;
@@ -418,8 +458,9 @@ export function integratedView(state, actor, options = {}) {
     result.allowedActions = t.driverScanMode===DRIVER_TWO_SCAN_MODE?(result.driverScan.canScan?['trip.driver_scan']:[]):[...allowed,...(result.driverScan.canScan?['trip.driver_scan']:[])];
     if(isQuarryCilegon(t)){
       result.quarry=quarryTripProjection(state,t,actor,options);
-      result.driverScan={mode:QUARRY_CILEGON_WORKFLOW,phase:'QUARRY_WORKFLOW',nextStage:null,canScan:false,reason:'QUARRY_GATE_REQUIRED',quantityBasis:'SCALE_SIMULATION',measurementPending:!t.grossEventId};
+      result.driverScan=quarryDriverProgress(state,t,actor,options);
       result.allowedActions=allowed.filter(action=>['trip.start','trip.loading','trip.arrive','trip.receive','trip.return_start'].includes(action));
+      if(result.driverScan.canScan)result.allowedActions.push('trip.driver_scan');
       if(result.quarry.allowedPurposes.length)result.allowedActions.push('quarry.gate.scan');
     }
     return result;

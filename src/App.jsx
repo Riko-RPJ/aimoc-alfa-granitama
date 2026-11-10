@@ -34,7 +34,6 @@ import { AdminFinalPage } from './features/pages/admin-final/AdminFinalPage.jsx'
 import { CrossRoleUatPage } from './features/uat/CrossRoleUatPage.jsx';
 import { IntegratedWorkspace } from './features/integrated/IntegratedWorkspace.jsx';
 import { QuarryCilegonWorkspace } from './features/quarry-cilegon/QuarryCilegonWorkspace.jsx';
-import {QuarryFlowDemo} from './features/quarry-flow-demo/QuarryFlowDemo.jsx';
 const QUARRY_CILEGON_SITE=import.meta.env.VITE_APP_VARIANT==='quarry-cilegon';
 const CROSS_ROLE_UAT=import.meta.env.VITE_CROSS_ROLE_UAT==='1';
 const loginRoleForPath=path=>path.startsWith('/stockpile')?'stock':path.startsWith('/driver')?'driver':path.startsWith('/jetty')?'jetty':'admin';
@@ -403,14 +402,13 @@ export function LegacyApp() {
 // LegacyApp remains available to source reviewers, but never owns /driver/tasks.
 export default function App() {
   useLanguage();
-  const quarryWorkspace=QUARRY_CILEGON_SITE||window.location.pathname.startsWith('/quarry-cilegon');
+  const quarryWorkspace=QUARRY_CILEGON_SITE||window.location.pathname.startsWith('/quarry-cilegon')||window.location.pathname==='/demo-flow';
   const requiredRole=loginRoleForPath(window.location.pathname);
   const [session,setSession]=useState(null);
   const [booting,setBooting]=useState(true);
   const [logoutError,setLogoutError]=useState('');
   useEffect(()=>{let alive=true;api('/api/me').then(d=>{if(alive)setSession(d);}).catch(()=>{}).finally(()=>{if(alive)setBooting(false);});return()=>{alive=false;};},[]);
   const logout=async()=>{try{await api('/api/logout',{method:'POST',headers:{'X-CSRF-Token':session?.csrfToken||''},body:'{}'});setSession(null);setLogoutError('');}catch(e){setLogoutError(e.message);}};
-  if(window.location.pathname==='/demo-flow')return <QuarryFlowDemo onOpenLive={()=>{window.location.href='/quarry-cilegon?view=guide';}}/>;
   if(booting)return <div className="boot"><Brand/><Loader2 className="spin" size={24}/><p>{tr('Menghubungkan ruang operasi…')}</p></div>;
   if(!session?.user||session.user.role!==requiredRole)return <>{quarryWorkspace&&<div style={{position:'absolute',zIndex:2,top:16,left:24,color:'#fff',fontSize:12,fontWeight:700,letterSpacing:'0.16em'}}>AIMOC · QUARRY CILEGON</div>}<Login requiredRole={requiredRole} onLogin={d=>{setSession(d);setLogoutError('');}}/></>;
   const props={user:session.user,session,csrf:session.csrfToken||'',logout,logoutError,onUnauthorized:()=>setSession(null)};

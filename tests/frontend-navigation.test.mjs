@@ -36,6 +36,12 @@ test('Driver omits its redundant single-item workspace navigation',async()=>{
   const source=await readFile(new URL('../src/features/integrated/IntegratedWorkspace.jsx',import.meta.url),'utf8');
   assert.match(source,/role!=='driver'&&<WorkspaceNavigation/);
 });
+test('Admin receiving table retains completed trips with canonical receipt evidence',async()=>{
+  const source=await readFile(new URL('../src/features/integrated/IntegratedWorkspace.jsx',import.meta.url),'utf8');
+  assert.match(source,/moving\.has\(t\.status\)\|\|t\.receivedAt\|\|t\.unloadedAt\|\|t\.receiptCode/);
+  assert.match(source,/buildDispatchGroups\(relevantTrips\.filter/);
+  assert.match(source,/paginateDispatchTruckRows\(group\.trips,receivingPages\[group\.dispatchId\]\|\|1,15\)/);
+});
 test('Driver starts with one active QR and reveals backend load details only after scan',async()=>{
   const workspace=await readFile(new URL('../src/features/integrated/IntegratedWorkspace.jsx',import.meta.url),'utf8');
   const qr=await readFile(new URL('../src/features/integrated/DriverAssignmentQrModal.jsx',import.meta.url),'utf8');

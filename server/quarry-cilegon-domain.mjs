@@ -27,8 +27,9 @@ export function quarryCilegonConfig(state){
   ]};
 }
 
-function sourceScope(actor,trip){
+function sourceScope(actor,trip,options={}){
   if(actor?.role==='admin')return;
+  if(options.quarryDriverAuthorized&&actor?.role==='driver'&&actor.id===trip.assignedDriverUserId)return;
   if(actor?.role!=='stock'||!list(actor.crusherIds).includes(trip.crusherId))fail('Akun tidak ditugaskan pada gerbang quarry ini.','FORBIDDEN',403);
 }
 function record(state,actor,type,entityId,extra={}){
@@ -109,7 +110,7 @@ function serialReady(state,trip){
 }
 
 function purposeGuard(state,trip,purpose,actor,options){
-  sourceScope(actor,trip);assignment(state,trip,options.drivers);
+  sourceScope(actor,trip,options);assignment(state,trip,options.drivers);
   if(purpose==='ENTRY'){
     if(!['queued','start_pending'].includes(trip.status))fail('Ritase belum dapat masuk quarry.','INVALID_TRANSITION');
     if(list(trip.quarryGateEvents).some(e=>e.purpose==='ENTRY')||trip.tareEventId||list(trip.weighingEvents).length)fail('Bukti masuk sudah tercatat.','ALREADY_RECORDED');
@@ -157,7 +158,7 @@ export function applyQuarryCilegonAction(state,action,payload,actor,options,hook
   }
   if(action!=='quarry.gate.scan')fail('Aksi quarry tidak tersedia.','ACTION_NOT_FOUND',404);
   const trip=one(state,'trips',payload.tripId);
-  sourceScope(actor,trip);
+  sourceScope(actor,trip,options);
   if(!validId(payload.externalEventId)||!validId(payload.truckId)||!['ENTRY','EXIT','RETURN'].includes(payload.purpose)||!['IN','OUT'].includes(payload.direction)||typeof payload.qrValue!=='string')fail('Identitas, tujuan, arah, dan QR scan wajib valid.','QUARRY_SCAN_INVALID',400);
   const digest=fingerprint({action,payload:{...payload,externalEventId:undefined}}),prior=list(state.events).find(e=>e.externalEventId===payload.externalEventId&&e.source===SOURCE);
   if(prior){

@@ -62,7 +62,7 @@ test('Alfa stock approval and planning feed four concurrent Cilegon queues; old 
  const passByTruck=new Map();
  for(const queue of queues){
   const row=queue[0],driver=driverFor(row),assignment=await call('/api/v1/demo/trips/'+row.id+'/assignment-qr','GET',undefined,driver);
-  assert.equal(assignment.status,200);assert.equal(assignment.body.trip.driverScan.phase,'QUARRY_WORKFLOW');assert.equal(assignment.body.trip.driverScan.canScan,false);
+  assert.equal(assignment.status,200);assert.equal(assignment.body.trip.driverScan.phase,'FIRST_SCAN_READY');assert.equal(assignment.body.trip.driverScan.canScan,true);
   const sourceView=await context(source(row));passByTruck.set(row.truckId,sourceView.state.trips.find(item=>item.id===row.id).quarry.dispatchPass.value);
   const otherDriver=Object.keys(actors).find(username=>actors[username].role==='driver'&&username!==driver);
   assert.equal((await call('/api/v1/demo/trips/'+row.id+'/assignment-qr','GET',undefined,otherDriver)).status,404);

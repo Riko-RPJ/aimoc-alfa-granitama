@@ -4,6 +4,7 @@ import {randomUUID} from 'node:crypto';
 import {createSeed} from '../server/seed.mjs';
 import {applyIntegratedAction,integratedView} from '../server/integrated-demo-domain.mjs';
 import {requestDetail} from '../server/request-detail.mjs';
+import {driverAssignmentQr} from '../server/driver-assignment-qr.mjs';
 
 const admin={id:'cilegon-qa-admin',role:'admin'};
 const driver={id:'cilegon-qa-driver',username:'qa-a',role:'driver',active:true};
@@ -48,6 +49,22 @@ test('Cilegon first entry requires a real simulated tare; QR reads never advance
  assert.equal(trip.weighingEvents.filter(event=>event.type==='TARE').length,1);
  assert.deepEqual(f.state.stockpiles,before.stockpiles);assert.deepEqual(f.state.vessels,before.vessels);
  assert.deepEqual(f.state.inventoryLedger,before.inventoryLedger);assert.deepEqual(f.state.erpOutbox,before.erpOutbox);
+});
+
+test('Driver scan and Quarry controls advance the same serial trips without duplicate custody',()=>{
+ const f=fixture(80),[first,second]=f.trips();
+ const scan=(trip,stage)=>{const assignment=driverAssignmentQr(f.state,driver,{tripId:trip.id,drivers:f.options.drivers});return f.act('trip.driver_scan',{tripId:trip.id,expectedStage:stage,externalEventId:randomUUID(),qrValue:assignment.qr.value,binding:assignment.binding,...(stage===2?{confirmations:{materialReceived:true,truckReturned:true}}:{})},driver);};
+ assert.equal(integratedView(f.state,driver,f.options).trips.find(row=>row.id===first.id).driverScan.nextStage,1);
+ scan(first,1);assert.equal(f.lookup(first.id).status,'ready_to_load');
+ f.act('trip.loading',{tripId:first.id},f.source(first.id));f.gate(first.id,'EXIT',{weightT:f.lookup(first.id).tareT+f.lookup(first.id).tonnageT});f.receive(first.id);f.back(first.id);
+ const driverSecond=integratedView(f.state,driver,f.options).trips.find(row=>row.id===second.id);
+ assert.equal(driverSecond.driverScan.nextStage,2,'Admin-side completion exposes the next serial trip as the Driver continuation');
+ scan(second,2);assert.equal(f.lookup(second.id).status,'returned');
+ assert.equal(integratedView(f.state,admin,f.options).trips.find(row=>row.id===second.id).status,'returned');
+ for(const trip of [first,second]){
+  assert.equal(f.state.inventoryLedger.filter(row=>row.referenceId===trip.id).length,2);
+  assert.equal(f.state.erpOutbox.filter(row=>row.entityId===trip.id).length,2);
+ }
 });
 
 test('same dispatch carries serial ritase through independent jetty custody and final return before releasing its truck',()=>{
