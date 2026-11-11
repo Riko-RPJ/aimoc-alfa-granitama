@@ -244,9 +244,20 @@ export function previewLandFleetAllocation(s,requestId){
   };
 }
 
+const activeIntegratedStockpileTrips=(s,stockpileId)=>s.trips.filter(t=>
+  t.source==='INTEGRATED_DEMO'&&openTrip(t)&&(t.stockpileId===stockpileId||t.destinationStockpileId===stockpileId));
+
 function createMeasurement(s,p,u){
   if(!['admin','stock'].includes(u?.role))fail('Hanya Admin atau operator Stockpile dapat mengajukan pengukuran.','FORBIDDEN',403);
-  const stock=get(s,'stockpiles',p.stockpileId),product=get(s,'products',stock.skuId);scope(u,'stock',stock.crusherId);if(!stock.active||!get(s,'crushers',stock.crusherId).active||!product.active)fail('Stockpile, crusher, atau SKU sudah nonaktif.');if(p.skuId&&p.skuId!==stock.skuId)fail('SKU harus sama dengan master stockpile.');
+  const stock=get(s,'stockpiles',p.stockpileId),product=get(s,'products',stock.skuId);
+  scope(u,'stock',stock.crusherId);
+  if(!stock.active||!get(s,'crushers',stock.crusherId).active||!product.active)fail('Stockpile, crusher, atau SKU sudah nonaktif.');
+  if(p.skuId&&p.skuId!==stock.skuId){
+    if(activeIntegratedStockpileTrips(s,stock.id).length){
+      fail('Stockpile masih dipakai ritase aktif. Gunakan stockpile dengan SKU yang sesuai.','ACTIVE_INTEGRATED_ASSIGNMENT',409);
+    }
+    fail('SKU harus sama dengan master stockpile.');
+  }
   const method=p.method||'camera_pending';if(!['manual','calibrated_geometry','camera_pending'].includes(method))fail('Metode pengukuran tidak dikenal.');
   if(method==='camera_pending'&&u.role!=='stock')fail('Bukti kamera diajukan oleh operator Stockpile.','FORBIDDEN',403);
   let volumeM3=null,geometry=null,quantityFields={};
@@ -262,6 +273,32 @@ function createMeasurement(s,p,u){
   const m={id:uid('msr'),code:code('MSR',s.measurements),stockpileId:stock.id,crusherId:stock.crusherId,skuId:stock.skuId,method,volumeM3,...quantityFields,geometry,status:method==='camera_pending'?'needs_calibration':'pending',stockLedgerSequence:s.inventoryLedger.filter(x=>x.stockpileId===stock.id).length,evidenceId:typeof p.evidenceId==='string'?p.evidenceId.slice(0,100):null,evidenceName:typeof p.evidenceName==='string'?p.evidenceName.slice(0,160):null,notes:typeof p.notes==='string'?p.notes.slice(0,500):'',createdAt:now(),createdBy:u.id,measurementLabel:method==='camera_pending'?'Bukti kamera, volume belum terukur':method==='calibrated_geometry'?'Estimasi geometri berdimensi — perlu validasi survei':'Hasil survei/operator — perlu persetujuan'};s.measurements.push(m);record(s,u,'measurement.created',m.id,`${m.code}: ${m.measurementLabel}`);return{entityId:m.id,message:volumeM3===null?'Bukti dicatat. Volume memerlukan kalibrasi/survei.':'Pengukuran menunggu persetujuan Admin.'};
 }
 
+function approveMeasurement(s,p,u){
+  admin(u);
+  const m=get(s,'measurements',p.measurementId);
+  if(m.status!=='pending'||!Number.isFinite(m.volumeM3)||m.volumeM3<0)
+    fail('Pengukuran belum terkalibrasi atau sudah diproses.','INVALID_MEASUREMENT',409);
+  const stock=get(s,'stockpiles',m.stockpileId);
+  // Pending measurements from older builds may carry a different SKU even
+  // when no stock movement has advanced the ledger sequence.
+  if(m.skuId!==stock.skuId||m.crusherId!==stock.crusherId)
+    fail('SKU atau area stockpile tidak sesuai dengan pengukuran. Buat pengukuran baru untuk stockpile yang sesuai.','STALE_MEASUREMENT',409);
+  if(activeIntegratedStockpileTrips(s,stock.id).some(t=>t.skuId!==stock.skuId))
+    fail('SKU stockpile berbeda dari SKU ritase aktif. Rekonsiliasi identitas dan saldo sebelum menyetujui pengukuran.','ACTIVE_INTEGRATED_ASSIGNMENT',409);
+  if(s.inventoryLedger.filter(x=>x.stockpileId===stock.id).length!==m.stockLedgerSequence)
+    fail('Stok sudah bergerak setelah pengukuran. Buat pengukuran baru agar saldo tidak menimpa transaksi.','STALE_MEASUREMENT',409);
+  if(m.volumeM3+EPS<stock.reservedM3)fail('Volume pengukuran lebih kecil dari reservasi aktif.','RESERVED_STOCK',409);
+  const delta=r(m.volumeM3-stock.onHandM3);
+  stock.onHandM3=m.volumeM3;
+  Object.assign(m,{status:'approved',approvedAt:now(),approvedBy:u.id});
+  ledger(s,u,'measurement_adjustment',stock.id,delta,m.id);
+  const surveyFields=['quantityValue','quantityUnit','densityTPerM3Snapshot','tonnageT','conversionBasis'];
+  const survey=Object.hasOwn(m,'quantityUnit')?Object.fromEntries(surveyFields.filter(key=>Object.hasOwn(m,key)).map(key=>[key,m[key]])):{};
+  erp(s,'inventory_measurement_approved',m.id,{stockpileId:stock.id,skuId:stock.skuId,volumeM3:m.volumeM3,deltaM3:delta,method:m.method,...survey});
+  record(s,u,'measurement.approved',m.id,`${m.code}: saldo stockpile diperbarui`);
+  return {entityId:m.id,message:'Stok diperbarui dan jejak audit disimpan.'};
+}
+
 export function applyAction(s,action,p={},u){
   if(!u?.id||!['admin','stock','jetty'].includes(u.role))fail('Sesi pengguna tidak valid.','UNAUTHORIZED',401);
   if(typeof action!=='string')fail('Tindakan wajib diisi.');let result;
@@ -271,9 +308,8 @@ export function applyAction(s,action,p={},u){
   else if(action==='request.plan')result=planRequest(s,p,u);
   else if(action.startsWith('trip.'))result=moveTrip(s,action.slice(5),p,u);
   else if(action==='measurement.create')result=createMeasurement(s,p,u);
-  else if(action==='measurement.approve'){
-    admin(u);const m=get(s,'measurements',p.measurementId);if(m.status!=='pending'||typeof m.volumeM3!=='number'||!Number.isFinite(m.volumeM3)||m.volumeM3<0)fail('Pengukuran belum terkalibrasi atau sudah diproses.','INVALID_MEASUREMENT',409);const stock=get(s,'stockpiles',m.stockpileId);if(s.inventoryLedger.filter(x=>x.stockpileId===stock.id).length!==m.stockLedgerSequence)fail('Stok sudah bergerak setelah pengukuran. Buat pengukuran baru agar saldo tidak menimpa transaksi.','STALE_MEASUREMENT',409);if(m.volumeM3+EPS<stock.reservedM3)fail('Volume pengukuran lebih kecil dari reservasi aktif.','RESERVED_STOCK',409);const delta=r(m.volumeM3-stock.onHandM3);stock.onHandM3=m.volumeM3;m.status='approved';m.approvedAt=now();m.approvedBy=u.id;ledger(s,u,'measurement_adjustment',stock.id,delta,m.id);erp(s,'inventory_measurement_approved',m.id,{stockpileId:stock.id,skuId:stock.skuId,volumeM3:m.volumeM3,deltaM3:delta,method:m.method,...(Object.hasOwn(m,'quantityUnit')?Object.fromEntries(['quantityValue','quantityUnit','densityTPerM3Snapshot','tonnageT','conversionBasis'].filter(key=>Object.hasOwn(m,key)).map(key=>[key,m[key]])): {})});record(s,u,'measurement.approved',m.id,`${m.code}: saldo stockpile diperbarui`);result={entityId:m.id,message:'Stok diperbarui dan jejak audit disimpan.'};
-  }else fail('Tindakan tidak dikenal.','UNKNOWN_ACTION',400);
+  else if(action==='measurement.approve')result=approveMeasurement(s,p,u);
+  else fail('Tindakan tidak dikenal.','UNKNOWN_ACTION',400);
   s.updatedAt=now();return result;
 }
 

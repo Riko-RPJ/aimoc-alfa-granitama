@@ -70,6 +70,124 @@ test('LAND receipt conserves stock and invalid destination or reservation failur
  const total=document=>document.stockpiles.reduce((sum,x)=>sum+x.onHandM3,0);assert.ok(Math.abs(total(after.document)-total(ready.document))<0.000002);assert.equal(after.document.stockpiles.find(x=>x.id===first.destinationStockpileId).onHandM3,first.volumeM3);assert.deepEqual(after.document.vessels,ready.document.vessels);assert.equal(trip(after.document,first.id).status,'returned');noPhysicalWeights(trip(after.document,first.id));
 });
 
+test('LAND tablet serial Scan 2 keeps the planned SKU after rejected relabel and books stock once per trip',async t=>{
+ const f=await fixture(t,{mode:'LAND',quantity:80,secondRequest:false});
+ const [first,second]=f.tripsA;
+ assert.equal(f.tripsA.length,2);
+ assert.ok(f.tripsA.every(ritase=>ritase.skuId==='split-12'&&ritase.tonnageT===40&&
+   ritase.truckId===first.truckId&&ritase.stockpileId===first.stockpileId&&ritase.destinationStockpileId===first.destinationStockpileId));
+ const sourceId=first.stockpileId,targetId=first.destinationStockpileId;
+ const bin=(document,id)=>document.stockpiles.find(row=>row.id===id);
+ const initial=await f.state();
+ assert.equal(bin(initial.document,targetId).managedBy,'STOCKPILE_LOCATION');
+ assert.equal(bin(initial.document,targetId).reservedM3,0,'Receiving stock must be protected even without its own reservation');
+
+ const legacy=(action,payload,user='admin')=>f.call('/api/action','POST',{action,payload,requestId:randomUUID()},user);
+ const survey=(stockpileId,skuId=first.skuId)=>({stockpileId,skuId,method:'manual',quantityValue:15,quantityUnit:'m3'});
+ const wire=await f.assignment(first.id);
+ await f.ok('trip.driver_scan',f.payload(first.id,1,wire),'qa-driver-a');
+ assert.deepEqual(inventory((await f.state()).document),inventory(initial.document));
+
+ const created=await legacy('measurement.create',survey(targetId));
+ assert.equal(created.status,200,JSON.stringify(created.body));
+ const staleId=created.body.result.entityId;
+ // A prior tablet build permitted a pending survey to carry a SKU different from the receiving bin.
+ const withStaleSurvey=(await f.state()).document;
+ withStaleSurvey.measurements.find(row=>row.id===staleId).skuId='abu-batu';
+ await f.db.query('UPDATE aimoc_alfa_ops.operation SET document=$1::jsonb WHERE id=1',[JSON.stringify(withStaleSurvey)]);
+ const beforeRejected=await f.state();
+ const staleApproval=await legacy('measurement.approve',{measurementId:staleId});
+ assert.equal(staleApproval.status,409,staleApproval.body.error);
+ assert.equal(staleApproval.body.error,'STALE_MEASUREMENT');
+ for(const stockpileId of [sourceId,targetId]){
+  const relabel=await legacy('master.stockpile.save',{id:stockpileId,skuId:'abu-batu'});
+  assert.equal(relabel.status,409,JSON.stringify(relabel.body));
+  assert.equal(relabel.body.error,'ACTIVE_INTEGRATED_ASSIGNMENT');
+  const wrongSku=await legacy('measurement.create',survey(stockpileId,'abu-batu'));
+  assert.equal(wrongSku.status,409,JSON.stringify(wrongSku.body));
+  assert.equal(wrongSku.body.error,'ACTIVE_INTEGRATED_ASSIGNMENT');
+ }
+ assert.deepEqual(await f.state(),beforeRejected,'Rejected SKU changes leave operation revision, stock and ERP untouched');
+
+ const sameSku=await legacy('measurement.create',survey(targetId));
+ assert.equal(sameSku.status,200,JSON.stringify(sameSku.body));
+ const surveyId=sameSku.body.result.entityId;
+ const approved=await legacy('measurement.approve',{measurementId:surveyId});
+ assert.equal(approved.status,200,JSON.stringify(approved.body));
+ const ready=await f.state();
+ assert.equal(bin(ready.document,targetId).onHandM3,15);
+ assert.equal(bin(ready.document,targetId).skuId,first.skuId);
+ assert.equal(ready.document.erpOutbox.find(row=>row.entityId===surveyId).payload.skuId,first.skuId);
+ const currentWire=await f.assignment(first.id);
+ assert.deepEqual(currentWire.binding,wire.binding);
+ assert.equal(currentWire.qr.value,wire.qr.value);
+ assert.equal(currentWire.trip.driverScan.nextStage,2);
+ assert.equal(currentWire.trip.driverScan.canScan,true);
+
+ // A bin already relabelled by an old release needs physical stock reconciliation.
+ // Scan 2 must never post the planned material into that different-SKU bin.
+ const oldRelabel=structuredClone(ready.document);
+ bin(oldRelabel,targetId).skuId='abu-batu';
+ await f.db.query('UPDATE aimoc_alfa_ops.operation SET document=$1::jsonb WHERE id=1',[JSON.stringify(oldRelabel)]);
+ const wrongLabelSurvey=await legacy('measurement.create',survey(targetId,'abu-batu'));
+ assert.equal(wrongLabelSurvey.status,200,JSON.stringify(wrongLabelSurvey.body));
+ const oldRelabelSnapshot=await f.state();
+ const heldApproval=await legacy('measurement.approve',{measurementId:wrongLabelSurvey.body.result.entityId});
+ assert.equal(heldApproval.status,409,heldApproval.body.error);
+ assert.equal(heldApproval.body.error,'ACTIVE_INTEGRATED_ASSIGNMENT');
+ const mismatchedQr=await f.call('/api/v1/demo/trips/'+first.id+'/assignment-qr','GET',undefined,'qa-driver-a');
+ assert.equal(mismatchedQr.status,409);
+ assert.equal(mismatchedQr.body.error,'ASSIGNMENT_QR_BINDING_INVALID');
+ const blocked=await f.action('trip.driver_scan',f.payload(first.id,2,wire),'qa-driver-a');
+ assert.equal(blocked.status,409);
+ assert.equal(blocked.body.error,'ASSIGNMENT_QR_BINDING_INVALID');
+ assert.deepEqual(await f.state(),oldRelabelSnapshot);
+ await f.db.query('UPDATE aimoc_alfa_ops.operation SET document=$1::jsonb WHERE id=1',[JSON.stringify(ready.document)]);
+
+ const complete=async(ritase,descriptor)=>{
+  const scan2=f.payload(ritase.id,2,descriptor),requestId=randomUUID();
+  const completed=await f.ok('trip.driver_scan',scan2,'qa-driver-a',{requestId});
+  assert.equal(completed.result.status,'returned');
+  const snapshot=await f.state();
+  const replay=await f.ok('trip.driver_scan',scan2,'qa-driver-a',{requestId});
+  assert.equal(replay.replayed,true);
+  assert.deepEqual(await f.state(),snapshot,'A retried Scan 2 cannot duplicate the receipt or stock movement');
+  return snapshot.document;
+ };
+ const interim=await complete(first,wire);
+ assert.equal(trip(interim,first.id).status,'returned');
+ assert.equal(trip(interim,second.id).status,'queued');
+ assert.equal(bin(interim,sourceId).reservedM3,second.volumeM3);
+ assert.equal(bin(interim,targetId).onHandM3,Number((15+first.volumeM3).toFixed(6)));
+ const next=await f.assignment(second.id);
+ assert.equal(next.qr.value,wire.qr.value);
+ assert.equal(next.binding.tripId,second.id);
+ assert.equal(next.trip.driverScan.nextStage,1);
+ await f.ok('trip.driver_scan',f.payload(second.id,1,next),'qa-driver-a');
+ const final=await complete(second,next);
+ assert.equal(final.requests.find(row=>row.id===f.requestA).status,'completed');
+ assert.deepEqual(final.vessels,ready.document.vessels);
+ const moved=first.volumeM3+second.volumeM3;
+ assert.equal(bin(final,sourceId).skuId,first.skuId);
+ assert.equal(bin(final,sourceId).reservedM3,0);
+ assert.equal(bin(final,sourceId).onHandM3,Number((bin(ready.document,sourceId).onHandM3-moved).toFixed(6)));
+ assert.equal(bin(final,targetId).skuId,first.skuId);
+ assert.equal(bin(final,targetId).onHandM3,Number((15+moved).toFixed(6)));
+ for(const ritase of f.tripsA){
+  const events=final.inventoryLedger.filter(row=>row.referenceId===ritase.id);
+  assert.deepEqual(events.map(row=>[row.type,row.stockpileId,row.volumeM3,row.tonnageT]),[
+   ['transfer_departed',sourceId,-ritase.volumeM3,-ritase.tonnageT],
+   ['stock_transfer_received',targetId,ritase.volumeM3,ritase.tonnageT],
+  ]);
+  const outbox=final.erpOutbox.filter(row=>row.entityId===ritase.id);
+  assert.deepEqual(outbox.map(row=>row.type),['stock_transfer_departed','stock_transfer_received']);
+  assert.ok(outbox.every(row=>row.payload.skuId===ritase.skuId&&row.payload.sourceStockpileId===sourceId&&
+    row.payload.destinationStockpileId===targetId&&row.payload.volumeM3===ritase.volumeM3&&row.payload.tonnageT===ritase.tonnageT));
+ }
+ assert.equal(final.measurements.find(row=>row.id===staleId).status,'pending');
+ assert.equal(final.erpOutbox.some(row=>row.entityId===staleId),false);
+});
+
 for(const stage of ['unloaded','returning'])test('legacy '+stage+' Scan2 verifies return only, preserving all accepted weighing and custody bytes',async t=>{
  const f=await fixture(t,{quantity:10,secondRequest:false}),first=f.tripsA[0],source=first.crusherId==='crusher-1'?'stock1':'stock2';
  await f.ok('trip.qr',{tripId:first.id});await f.ok('trip.tare',{tripId:first.id,weightT:20},source);await f.ok('trip.start',{tripId:first.id},'qa-driver-a');await f.ok('trip.loading',{tripId:first.id},source);await f.ok('trip.gross',{tripId:first.id,weightT:30},source);await f.ok('trip.depart',{tripId:first.id},source);await f.ok('trip.arrive',{tripId:first.id},'jetty1');await f.ok('trip.receive',{tripId:first.id},'jetty1');
