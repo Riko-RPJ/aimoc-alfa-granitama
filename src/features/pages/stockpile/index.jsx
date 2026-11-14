@@ -14,7 +14,7 @@ export function StockpileHomePage({context}) {
   const waiting=trips.filter(t=>['queued','loading'].includes(t.status));
   return <>
     <div className="stats-grid four">
-      <StatCard label={tr('LOKASI DITUGASKAN')} value={crushers.length} unit={tr('crusher')} icon={Factory} caption={tr('{0} stockpile dalam scope akun',scopeStock.length)} />
+      <StatCard label={tr('LOKASI DITUGASKAN')} value={crushers.length} unit={tr('Area stok')} icon={Factory} caption={tr('{0} stockpile dalam scope akun',scopeStock.length)} />
       <StatCard label={tr('STOK TERSEDIA')} value={fmt(sum(scopeStock,x=>(x.onHandM3||0)-(x.reservedM3||0)))} unit={tr('m³')} icon={Layers3} caption={tr('Setelah reservasi aktif')} />
       <StatCard label={tr('PICKUP MENUNGGU')} value={waiting.length} unit={tr('ritase')} icon={Truck} tone="amber" caption={tr('Antrean atau sedang loading')} />
       <StatCard label={tr('AKTIVITAS TERCATAT')} value={events.length} unit={tr('event')} icon={Activity} tone="blue" caption={tr('Hanya untuk lokasi yang ditugaskan')} />

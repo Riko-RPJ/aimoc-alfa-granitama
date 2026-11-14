@@ -9,7 +9,8 @@ const driver = {id: 'location-driver-test', role: 'driver', active: true};
 const options = {drivers: [driver]};
 const second = 'stockpile-location-crusher-2';
 const act = (state, action, payload, actor = admin) => applyIntegratedAction(state, action, payload, actor, options);
-const master = (name = 'Independent destination', overrides = {}) => ({code: 'SPL-CUSTOM', name, address: 'Synthetic address', transportModes: ['MARINE'], receivingCrusherId: null, active: true, ...overrides});
+const master = (name = 'Independent destination', overrides = {}) => ({name, address: 'Synthetic address', transportModes: ['MARINE'], ...overrides});
+const editable = location => ({id:location.id,name:location.name,address:location.address,transportModes:location.transportModes});
 const payload = (mode = 'LAND', overrides = {}) => ({transferMode: mode, destinationLocationId: second, destination: 'Untrusted free text must be ignored', ...(mode === 'MARINE' ? {jettyId: 'jetty-1', vesselId: 'vessel-1'} : {}), lines: [{skuId: 'split-12', quantity: 10, unit: 't'}], ...overrides});
 
 test('legacy document READ derives only existing active receiving areas without changing inventory or JSON', () => {
@@ -42,7 +43,7 @@ test('default codes stay bounded and collision-safe for legal legacy crusher cod
   assert.deepEqual(stockpileLocationsForRead(state), locations);
 });
 
-test('master CRUD is Admin-only, complete-schema, case-insensitive unique, and atomic on failure', () => {
+test('master CRUD is Admin-only, generated-code unique, guarded against managed fields, and atomic on failure', () => {
   const state = createSeed();
   const before = structuredClone(state);
   assert.throws(() => applyStockpileLocationAction(state, 'master.stockpileLocation.save', master(), {id: 'stock', role: 'stock'}), error => error.code === 'FORBIDDEN');
@@ -54,23 +55,28 @@ test('master CRUD is Admin-only, complete-schema, case-insensitive unique, and a
   }
   const saved = act(state, 'master.stockpileLocation.save', master());
   assert.ok(state.stockpileLocations.some(location => location.id === saved.locationId));
+  const secondSaved=act(state, 'master.stockpileLocation.save', master('Another'));
+  assert.notEqual(secondSaved.locationCode.toLowerCase(),saved.locationCode.toLowerCase());
   const afterCreate = structuredClone(state);
-  assert.throws(() => act(state, 'master.stockpileLocation.save', master('Another', {code: 'spl-custom'})), error => error.code === 'DUPLICATE');
-  assert.deepEqual(state, afterCreate);
+  assert.throws(() => act(state, 'master.stockpileLocation.save', master('Override', {code: saved.locationCode})), error => error.code === 'STOCKPILE_LOCATION_MANAGED_FIELD');
+  assert.deepEqual(state,afterCreate);
+  act(state,'master.stockpileLocation.delete',{id:secondSaved.locationId});
   act(state, 'master.stockpileLocation.delete', {id: saved.locationId});
   assert.ok(!state.stockpileLocations.some(location => location.id === saved.locationId));
 });
 
-test('active LAND requires explicitly mapped active receiving area and all requested SKU stockpiles', () => {
-  const state = createSeed();
-  assert.throws(() => act(state, 'master.stockpileLocation.save', master('Unmapped', {transportModes: ['LAND']})), error => error.code === 'RECEIVING_AREA_REQUIRED');
-  assert.throws(() => act(state, 'master.stockpileLocation.save', master('Unknown', {transportModes: ['LAND'], receivingCrusherId: 'unknown'})), error => error.code === 'DESTINATION_INVALID');
-  state.crushers[1].active = false;
-  assert.throws(() => act(state, 'master.stockpileLocation.save', master('Inactive', {transportModes: ['LAND'], receivingCrusherId: 'crusher-2'})), error => error.code === 'RECEIVING_AREA_REQUIRED');
-  assert.throws(() => act(state, 'request.create', payload()), error => error.code === 'RECEIVING_AREA_REQUIRED');
-  state.crushers[1].active = true;
-  state.stockpiles.find(stock => stock.crusherId === 'crusher-2' && stock.skuId === 'split-12').active = false;
-  assert.throws(() => act(state, 'request.create', payload()), error => error.code === 'DESTINATION_STOCKPILE_REQUIRED');
+test('new LAND automatically gets dedicated logical receiving inventory; legacy target activity and SKU guards remain', () => {
+  const state=createSeed();
+  const saved=act(state,'master.stockpileLocation.save',master('New destination',{transportModes:['LAND']}));
+  const location=state.stockpileLocations.find(row=>row.id===saved.locationId),area=state.crushers.find(row=>row.id===location.receivingCrusherId);
+  assert.equal(area.kind,'RECEIVING_AREA');assert.equal(area.production,false);assert.equal(area.sourceEligible,false);
+  assert.ok(state.stockpiles.filter(stock=>stock.crusherId===area.id).every(stock=>stock.onHandM3===0&&stock.reservedM3===0));
+  const resolved=resolveStockpileDestination(state,payload('LAND',{destinationLocationId:location.id,destinationId:undefined}));assert.equal(resolved.destinationId,area.id);
+  state.crushers.find(row=>row.id==='crusher-2').active=false;
+  assert.throws(()=>act(state,'request.create',payload()),error=>error.code==='RECEIVING_AREA_REQUIRED');
+  state.crushers.find(row=>row.id==='crusher-2').active=true;
+  state.stockpiles.find(stock=>stock.crusherId==='crusher-2'&&stock.skuId==='split-12').active=false;
+  assert.throws(()=>act(state,'request.create',payload()),error=>error.code==='DESTINATION_STOCKPILE_REQUIRED');
 });
 
 test('both new modes require an active allowed master ID; text cannot bypass validation or control snapshots', () => {
@@ -90,7 +96,8 @@ test('both new modes require an active allowed master ID; text cannot bypass val
   const state = createSeed();
   const saved = act(state, 'master.stockpileLocation.save', master());
   assert.throws(() => act(state, 'request.create', payload('LAND', {destinationLocationId: saved.locationId})), error => error.code === 'DESTINATION_MODE_INVALID');
-  act(state, 'master.stockpileLocation.save', master('Inactive', {id: saved.locationId, active: false}));
+  assert.throws(()=>act(state,'master.stockpileLocation.save',master('Inactive',{id:saved.locationId,active:false})),error=>error.code==='STOCKPILE_LOCATION_MANAGED_FIELD');
+  state.stockpileLocations.find(row=>row.id===saved.locationId).active=false;
   assert.throws(() => act(state, 'request.create', payload('MARINE', {destinationLocationId: saved.locationId})), error => error.code === 'INACTIVE_DESTINATION');
   assert.throws(() => act(state, 'request.create', payload('LAND', {destinationId: 'crusher-1'})), error => error.code === 'DESTINATION_MISMATCH');
 });
@@ -100,7 +107,7 @@ test('planned request, dispatch, trip and ERP snapshots stay frozen through perm
   const created = act(state, 'request.create', payload('LAND'));
   const originalSnapshot = structuredClone(state.requests[0].destinationLocationSnapshot);
   const location = state.stockpileLocations.find(location => location.id === second);
-  act(state, 'master.stockpileLocation.save', {...location, name: 'Renamed receiving site', address: 'New address'});
+  act(state, 'master.stockpileLocation.save', {...editable(location), name: 'Renamed receiving site', address: 'New address'});
   const planned = act(state, 'request.plan', {requestId: created.entityId});
   assert.deepEqual(state.requests[0].destinationLocationSnapshot, originalSnapshot);
   assert.deepEqual(state.dispatches[0].destinationLocationSnapshot, originalSnapshot);
@@ -117,7 +124,7 @@ test('planned request, dispatch, trip and ERP snapshots stay frozen through perm
   act(state, 'trip.return_start', {tripId}, driver);
   act(state, 'trip.return', {tripId});
   const current = state.stockpileLocations.find(location => location.id === second);
-  act(state, 'master.stockpileLocation.save', {...current, receivingCrusherId: 'crusher-1'});
+  assert.throws(()=>act(state,'master.stockpileLocation.save',{...editable(current),receivingCrusherId:'crusher-1'}),error=>error.code==='STOCKPILE_LOCATION_MANAGED_FIELD');
   assert.deepEqual(state.trips[0].destinationLocationSnapshot, originalSnapshot);
   assert.throws(() => act(state, 'master.stockpileLocation.delete', {id: second}), error => error.code === 'LOCATION_IN_USE');
 });
@@ -128,7 +135,7 @@ test('open requested or queued work prevents receiving-area rebind, deactivation
     if (planned) act(state, 'request.plan', {requestId: created.entityId});
     const location = state.stockpileLocations.find(location => location.id === second), before = structuredClone(state);
     for (const change of [{active: false}, {receivingCrusherId: 'crusher-1'}, {transportModes: ['MARINE']}]) {
-      assert.throws(() => act(state, 'master.stockpileLocation.save', {...location, ...change}), error => error.code === 'OPEN_LOCATION_REFERENCE');
+      assert.throws(() => act(state, 'master.stockpileLocation.save', {...editable(location), ...change}), error => error.code === (Object.hasOwn(change,'transportModes')?'OPEN_LOCATION_REFERENCE':'STOCKPILE_LOCATION_MANAGED_FIELD'));
       assert.deepEqual(state, before);
     }
     assert.throws(() => act(state, 'master.stockpileLocation.delete', {id: second}), error => error.code === 'LOCATION_IN_USE');
@@ -161,7 +168,7 @@ test('legacy LAND references protect mapping, and receiving crusher guards prese
   assert.doesNotThrow(() => guardReceivingCrusherMutation(unmigrated, 'master.crusher.delete', {id: 'crusher-2'}), 'virtual READ defaults do not create persisted references');
   state.requests.push({id: 'legacy', transferMode: 'LAND', destinationId: 'crusher-2', status: 'requested'});
   const location = state.stockpileLocations.find(location => location.id === second);
-  assert.throws(() => act(state, 'master.stockpileLocation.save', {...location, receivingCrusherId: 'crusher-1'}), error => error.code === 'OPEN_LOCATION_REFERENCE');
+  assert.throws(() => act(state, 'master.stockpileLocation.save', {...editable(location), receivingCrusherId: 'crusher-1'}), error => error.code === 'STOCKPILE_LOCATION_MANAGED_FIELD');
   assert.throws(() => guardReceivingCrusherMutation(state, 'master.crusher.delete', {id: 'crusher-2'}), error => error.code === 'RECEIVING_LOCATION_IN_USE');
   assert.throws(() => guardReceivingCrusherMutation(state, 'master.crusher.save', {id: 'crusher-2', active: false}), error => error.code === 'RECEIVING_LOCATION_IN_USE');
   assert.doesNotThrow(() => guardReceivingCrusherMutation(state, 'master.crusher.save', {id: 'crusher-2', name: 'Rename only'}));
@@ -169,7 +176,8 @@ test('legacy LAND references protect mapping, and receiving crusher guards prese
 
 test('legacy LAND mapping requires an explicit choice when several master locations share its receiving area', () => {
   const state = createSeed();
-  const other = act(state, 'master.stockpileLocation.save', master('Second mapped destination', {transportModes: ['LAND'], receivingCrusherId: 'crusher-2'}));
+  const other={locationId:'legacy-second-mapped-destination'};
+  state.stockpileLocations.push({id:other.locationId,code:'SPL-LEGACY-ALIAS',name:'Second mapped destination',address:'',transportModes:['LAND'],receivingCrusherId:'crusher-2',active:true});
   const row = {id: 'legacy-ambiguous', source: 'INTEGRATED_DEMO', transferMode: 'LAND', destinationId: 'crusher-2', destination: 'Historical free text', lines: [{skuId: 'split-12', quantity: 10, unit: 't', tonnageT: 10, volumeM3: 6.666667, densityTPerM3: 1.5}], status: 'requested', deliveredM3: 0, deliveredT: 0};
   state.requests.push(row);
   const before = structuredClone(state);
